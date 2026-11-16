@@ -390,7 +390,10 @@ export class Player {
     if (hasMove) {
       const want = Math.atan2(wish.x, wish.z);
       const d = angDiff(want, this.yaw);
-      if (Math.abs(d) > 2.4 && this.s > 6) {
+      if (this.s < 5 && Math.abs(d) > 1.0) {
+        this.yaw = want;                                  // 느릴 때는 바로 그 방향으로 몸을 돌림 (뒤로 가기 = 정면을 보며 카메라 쪽으로)
+        this.gearTimer = 0;
+      } else if (Math.abs(d) > 2.4 && this.s > 5) {
         this.s = Math.max(0, this.s - P.brake * m * dt);   // 반대 방향: 브레이크
         this.gearTimer = 0;
       } else {
@@ -487,16 +490,19 @@ export class Player {
     return g;
   }
 
-  // ---------------- 360도 루프 (직접 속도와 방향을 맞춰야 돌 수 있음) ----------------
+  // ---------------- 360도 루프: 진짜 땅처럼 직접 달려서 돌기 ----------------
+  // 트랙 위에서의 위치 = (loopT: 트랙을 따라 얼마나 왔는지 0~1, loopLat: 트랙 가운데에서 옆으로 얼마나)
+  // 속도 = (loopVt: 트랙 방향 속도, loopVu: 옆 방향 속도). 방향키: 위=앞으로, 아래=브레이크, 좌우=옆으로.
   checkLoopEntry() {
-    if (this.loopCD > 0 || this.s < 6) return;
+    if (this.loopCD > 0 || this.s < 3) return;
     const hv = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     for (const L of this.game.world.loops) {
       const rel = this.pos.clone().sub(L.entry);
       const along = rel.dot(L.fwd), lat = rel.dot(L.side);
-      if (along > -1.5 && along < 1.5 && Math.abs(lat) < L.width / 2 - 0.3 && hv.dot(L.fwd) > CFG.loop.entryAlign) {
-        this.state = 'loop'; this.loop = L; this.loopT = 0.002; this.loopLat = lat;
-        this.rolling = this.rolling && this.s > 10;
+      const cos = hv.dot(L.fwd);
+      if (along > -0.5 && along < 1.5 && Math.abs(lat) < L.width / 2 && cos > 0.25) {
+        this.state = 'loop'; this.loop = L; this.loopT = Math.max(0.001, along / L.length); this.loopLat = lat;
+        this.loopVt = this.s * cos; this.loopVu = this.s * hv.dot(L.side);
         return;
       }
     }
@@ -504,36 +510,46 @@ export class Player {
 
   updateLoop(dt, wish, hasMove) {
     const L = this.loop, C = CFG.loop, m = this.mul();
+    const input = this.game.input.move;            // 루프 안에서는 카메라가 뒤에 있으니 방향키 그대로
+    const fwdIn = hasMove ? input.y : 0, sideIn = hasMove ? input.x : 0;
     const a = this.loopT * Math.PI * 2;
     const g = CFG.player.gravity * C.gravityScale;
-    let push = hasMove ? C.push * m : -2;
-    if (hasMove) { // 반대로 누르면 브레이크
-      const camBack = wish.dot(L.fwd);
-      if (camBack < -0.6 && Math.abs(Math.cos(a)) > 0.7) push = -C.push * 2 * m;
-    }
-    this.s += (push - g * Math.sin(a)) * dt;
-    if (this.s > this.cap(3) * 1.6) this.s -= CFG.player.overDecay * dt;
-    this.loopT += this.s * dt / L.length;
-    if (this.loopT >= 1) { // 성공!
-      L.pathAt(1, this.pos).addScaledVector(L.side, this.loopLat);
-      this.state = 'ground'; this.yaw = Math.atan2(L.fwd.x, L.fwd.z);
-      this.loop = null; this.stats.loops++; this.slopeVy = 0; this.loopCD = 0.5;
+    // 트랙 방향: 앞 키 = 가속(최고 속도까지), 아래 키 = 브레이크, 놓으면 조금씩 느려짐
+    if (fwdIn > 0.2) { if (this.loopVt < this.cap(this.gear)) this.loopVt += C.push * m * fwdIn * dt; }
+    else if (fwdIn < -0.2) this.loopVt -= Math.sign(this.loopVt) * Math.min(Math.abs(this.loopVt), CFG.player.brake * 0.5 * m * dt);
+    else this.loopVt -= Math.sign(this.loopVt) * Math.min(Math.abs(this.loopVt), 2 * dt);
+    this.loopVt -= g * Math.sin(a) * dt;            // 올라갈 때 중력 때문에 느려지고, 내려올 때 빨라짐
+    if (this.loopVt > this.cap(3) * 1.6) this.loopVt -= CFG.player.overDecay * dt;
+    // 옆 방향: 좌우 키로 움직이고, 가만히 두면 천천히 멈춤
+    this.loopVu += sideIn * C.sideAccel * m * dt;
+    this.loopVu *= Math.max(0, 1 - 2.5 * dt);
+    this.loopT += this.loopVt * dt / L.length;
+    this.loopLat += this.loopVu * dt;
+    this.s = Math.hypot(this.loopVt, this.loopVu);
+    this.ball = this.rolling;
+    const surfVel = () => L.tangentAt(Math.min(1, Math.max(0, this.loopT))).multiplyScalar(this.loopVt).addScaledVector(L.side, this.loopVu);
+    const leave = (toGround) => {
+      this.loop = null; this.loopCD = 0.8;
+      const v = surfVel();
+      if (toGround) { this.state = 'ground'; this.s = Math.hypot(v.x, v.z); this.yaw = Math.atan2(v.x, v.z); this.slopeVy = 0; this.gear = this.gearFor(this.s); }
+      else { this.vel.copy(v); this.state = 'air'; this.airActionUsed = false; this.rolling = false; }
+    };
+    // 트랙 옆으로 벗어나면 떨어짐
+    if (Math.abs(this.loopLat) > L.width / 2 + 0.2) {
+      L.pathAt(Math.min(1, Math.max(0, this.loopT)), this.pos).addScaledVector(L.side, this.loopLat);
+      leave(false);
+      if (this.pos.y > L.base.y + 2) this.game.hud.toast('트랙에서 떨어졌어요! 방향을 똑바로 💨');
       return;
     }
-    if (this.loopT <= 0) { // 속도가 모자라서 뒤로 미끄러져 나옴
-      L.pathAt(0, this.pos).addScaledVector(L.side, this.loopLat);
-      this.state = 'ground'; this.yaw = Math.atan2(-L.fwd.x, -L.fwd.z); this.s = Math.abs(this.s);
-      this.loop = null; this.loopCD = 1.0; this.slopeVy = 0;
-      return;
-    }
-    // 위쪽에서 너무 느리면 떨어짐
+    if (this.loopT >= 1) { L.pathAt(1, this.pos).addScaledVector(L.side, this.loopLat); this.stats.loops++; leave(true); return; }   // 한 바퀴 성공!
+    if (this.loopT <= 0) { L.pathAt(0, this.pos).addScaledVector(L.side, this.loopLat); leave(true); return; }                       // 뒤로 미끄러져 나옴
+    // 위쪽에서 너무 느리면 떨어짐 (원심력이 모자람)
     const cosA = Math.cos(a);
-    if (cosA < 0.1 && this.s * this.s / L.R < -g * cosA + 0.5) {
-      const tan = L.tangentAt(this.loopT);
-      this.vel.copy(tan).multiplyScalar(this.s);
-      this.state = 'air'; this.loop = null; this.loopCD = 1.2;
-      this.airActionUsed = false; this.ball = true; this.rolling = false;
-      this.game.hud.toast('속도가 부족해요! 더 빠르게 💨');
+    if (cosA < 0.1 && this.loopVt * this.loopVt / L.R < -g * cosA + 0.3) {
+      L.pathAt(this.loopT, this.pos).addScaledVector(L.side, this.loopLat);
+      leave(false);
+      this.ball = true;
+      this.game.hud.toast('속도가 부족해요! 멀리서부터 더 빠르게 💨');
       return;
     }
     L.pathAt(this.loopT, this.pos).addScaledVector(L.side, this.loopLat);
@@ -810,9 +826,10 @@ export class Player {
     v.root.position.copy(this.pos);
     if (this.state === 'loop' && this.loop) {
       const L = this.loop;
-      const fwd = L.tangentAt(this.loopT);
-      if (this.s < 0) fwd.negate();
+      const fwd = L.tangentAt(this.loopT).multiplyScalar(this.loopVt).addScaledVector(L.side, this.loopVu);
+      if (fwd.lengthSq() < 0.01) fwd.copy(L.tangentAt(this.loopT)); else fwd.normalize();
       const up = L.centerAt(this.loopT).sub(L.pathAt(this.loopT)).normalize();
+      fwd.addScaledVector(up, -fwd.dot(up)).normalize();
       const right = new THREE.Vector3().crossVectors(up, fwd).normalize();
       const up2 = new THREE.Vector3().crossVectors(fwd, right);
       tmpM.makeBasis(right, up2, fwd);

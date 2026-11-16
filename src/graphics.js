@@ -247,27 +247,17 @@ export class Graphics {
     const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.HalfFloatType);
     tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter; tex.needsUpdate = true;
 
-    const count = this.mobile ? 14000 : 60000, tile = this.mobile ? 56 : 84;
-    const base = new THREE.InstancedBufferGeometry();
-    // 날 하나: 아래 넓고 위로 뾰족
-    const pos = [-0.07, 0, 0, 0.07, 0, 0, -0.055, 0.35, 0, 0.055, 0.35, 0, -0.03, 0.7, 0, 0.03, 0.7, 0, 0, 1, 0];
-    base.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    base.setIndex([0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5, 4, 5, 6]);
-    const off = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) { off[i * 3] = Math.random() * tile; off[i * 3 + 1] = Math.random() * tile; off[i * 3 + 2] = Math.random(); }
-    base.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 3));
-    base.instanceCount = count;
     const T = this.T;
     this.grassMat = new THREE.ShaderMaterial({
       uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
-        hm: { value: null }, hs: { value: HS }, tile: { value: tile }, center: { value: new THREE.Vector2() }, player: { value: new THREE.Vector3() }, time: { value: 0 },
+        hm: { value: null }, hs: { value: HS }, tile: { value: 84 }, inner: { value: 0 }, bscale: { value: 1 }, center: { value: new THREE.Vector2() }, player: { value: new THREE.Vector3() }, time: { value: 0 },
         cA: { value: new THREE.Color(T.grassB).multiplyScalar(0.75) }, cB: { value: new THREE.Color(T.grassA).lerp(new THREE.Color(0xeaff9a), 0.25) },
         dryA: { value: new THREE.Color(0x9a8a3a) }, dryB: { value: new THREE.Color(0xe8d27a) },
         purA: { value: new THREE.Color(0x3a4a3a) }, purB: { value: new THREE.Color(0x9a7ac8) },
         sunDir: { value: this.sunDir },
       }]),
       vertexShader: `
-        uniform sampler2D hm; uniform float hs, tile, time; uniform vec2 center; uniform vec3 player;
+        uniform sampler2D hm; uniform float hs, tile, time, inner, bscale; uniform vec2 center; uniform vec3 player;
         attribute vec3 aOff; varying float vY; varying vec3 vTint; varying float vFlower; varying float vRand;
         #include <fog_pars_vertex>
         void main(){
@@ -276,13 +266,13 @@ export class Graphics {
           vec4 h = texture2D(hm, (wp + hs) / (2.0 * hs));
           float r = aOff.z;
           float keep = step(r, h.g);
-          float fade = 1.0 - smoothstep(tile * 0.32, tile * 0.5, length(rel));
+          float fade = (1.0 - smoothstep(tile * 0.36, tile * 0.5, length(rel))) * smoothstep(inner, inner + 10.0, length(rel));
           float flower = step(0.975, fract(r * 91.7)) * step(h.b, 0.5);
-          float height = (0.45 + fract(r * 13.7) * 0.7) * keep * fade * (1.0 + flower * 0.3);
+          float height = (0.45 + fract(r * 13.7) * 0.7) * keep * fade * (1.0 + flower * 0.3) * bscale;
           float ang = r * 40.0;
           vec2 dir = vec2(cos(ang), sin(ang));
           float y = position.y;
-          vec3 p = vec3(dir * position.x, 0.0).xzy;
+          vec3 p = vec3(dir * position.x * (0.6 + bscale * 0.4), 0.0).xzy;
           p.y = y * height;
           // 바람 + 플레이어가 지나가면 눕기
           float wind = sin(time * 1.8 + wp.x * 0.12 + wp.y * 0.09) * 0.22 + sin(time * 3.1 + wp.x * 0.5) * 0.06;
@@ -313,9 +303,27 @@ export class Graphics {
       fog: true, side: THREE.DoubleSide,
     });
     this.grassMat.uniforms.hm.value = tex;
-    this.grass = new THREE.Mesh(base, this.grassMat);
-    this.grass.frustumCulled = false;
-    this.scene.add(this.grass);
+    const makeLayer = (count, tile, inner, bscale) => {
+      const base = new THREE.InstancedBufferGeometry();
+      const pos = [-0.07, 0, 0, 0.07, 0, 0, -0.055, 0.35, 0, 0.055, 0.35, 0, -0.03, 0.7, 0, 0.03, 0.7, 0, 0, 1, 0];
+      base.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      base.setIndex([0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5, 4, 5, 6]);
+      const off = new Float32Array(count * 3);
+      for (let i = 0; i < count; i++) { off[i * 3] = Math.random() * tile; off[i * 3 + 1] = Math.random() * tile; off[i * 3 + 2] = Math.random(); }
+      base.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 3));
+      base.instanceCount = count;
+      const mat = this.grassMat.clone();
+      mat.uniforms.hm.value = tex; mat.uniforms.tile.value = tile; mat.uniforms.inner.value = inner; mat.uniforms.bscale.value = bscale;
+      const mesh = new THREE.Mesh(base, mat);
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      return mesh;
+    };
+    // 가까운 풀(촘촘) + 먼 풀(크고 듬성듬성, 시야 끝까지)
+    this.grassLayers = this.mobile
+      ? [makeLayer(14000, 56, 0, 1), makeLayer(26000, 230, 20, 1.7)]
+      : [makeLayer(60000, 84, 0, 1), makeLayer(90000, 380, 30, 1.8)];
+    this.grass = this.grassLayers[0];
   }
 
   _smoke() {
@@ -342,10 +350,9 @@ export class Graphics {
       this.clouds.set(i, x, c[1], c[2], c[3], 1, 1, 1, 0.9);
     });
     this.clouds.flush();
-    if (this.grass) {
-      this.grassMat.uniforms.time.value = time;
-      this.grassMat.uniforms.center.value.set(focus.x, focus.z);
-      this.grassMat.uniforms.player.value.copy(focus);
+    if (this.grassLayers) for (const g of this.grassLayers) {
+      const u = g.material.uniforms;
+      u.time.value = time; u.center.value.set(focus.x, focus.z); u.player.value.copy(focus);
     }
     // 연기 (가까운 굴뚝만)
     for (const e of this.world.smokeEmitters) {

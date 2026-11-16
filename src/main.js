@@ -3,7 +3,7 @@ import * as THREE from '../vendor/three.module.js';
 import { CFG } from './config.js';
 import { NAMES } from './names.js';
 import { Input } from './input.js';
-import { initAudio, SFX } from './audio.js';
+import { initSound as initAudio, SFX, SFX_INFO, BGM_INFO, playMusic, playVoice, stopVoice } from './audio.js';
 import { World, ZONES } from './world.js';
 import { Graphics, createRenderer } from './graphics.js';
 import { Rings } from './rings.js';
@@ -18,6 +18,8 @@ import { CHARACTER_DEFS } from './character.js';
 import { Cinematic, V } from './cinematic.js';
 import { Scientist, GearHologram, LINES, RADIO_FRIEND } from './story.js';
 import { loadProgress, recoverCrystal, BIG_CRYSTALS } from './progress.js';
+import { readSave, hasAnySave } from './save.js';
+import { PauseMenu, showLoadList } from './menu.js';
 
 function showError(msg) {
   let box = document.getElementById('err');
@@ -51,7 +53,9 @@ document.getElementById('loading-title').textContent = NAMES.stages[stageIdx];
 document.getElementById('loading-tip').textContent = '💡 ' + TIPS[Math.floor(Math.random() * TIPS.length)];
 
 const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
-const game = { time: 0, freezeT: 0, players: [], hard: !!(stageIdx > 0 && carry?.hard) };
+const loadSlot = parseInt(params.get('load') || '0', 10);
+const LOAD = loadSlot ? readSave(loadSlot) : null;
+const game = { time: 0, freezeT: 0, players: [], hard: LOAD ? !!LOAD.hard : !!(stageIdx > 0 && carry?.hard) };
 window.__game = game; // 테스트용
 
 setTimeout(boot, 60); // 로딩 화면이 먼저 보이도록
@@ -73,7 +77,8 @@ function boot() {
   game.pickups = new Pickups(scene);
   game.enemies = new Enemies(scene, game.world, game.world.enemySpots, game.fx, game.pickups, game);
   game.rings = new Rings(scene, game.world, game.world.ringSpots);
-  game.missions = new Missions(1001 + Math.floor(Math.random() * 100000), { walls: true });
+  const missionSeed = LOAD ? LOAD.seed : 1001 + Math.floor(Math.random() * 100000);
+  game.missions = new Missions(missionSeed, { walls: true });
   game.hud = new HUD(game.input);
   game.cam = new CameraRig(camera);
   const cine = new Cinematic();
@@ -97,16 +102,17 @@ function boot() {
     game.player = pl; game.players = [pl];
     if (carry && stageIdx > 0) pl.storedHearts = carry.hearts || 0;
   }
-  setCharacter(carry?.char && stageIdx > 0 ? carry.char : 'speed');
+  setCharacter(LOAD ? LOAD.char : carry?.char && stageIdx > 0 ? carry.char : 'speed');
   game.cam.yaw = W.spawn.yaw;
+  playMusic('title');
 
   // ---- 시네마틱 도우미 ----
   const P = STAGE.place, VIL = NAMES.villain, SCI = NAMES.scientist;
   function playCine(shots, then) {
-    game.hud.hide(true);
+    game.hud.hide(true); game.pauseMenu?.enable(false);
     cine.play(shots, camera, () => {
       holo.hide();
-      game.hud.hide(false);
+      game.hud.hide(false); game.pauseMenu?.enable(true);
       game.cam.first = true; game.cam.yaw = pl.yaw;
       clockReset = true;
       then?.();
@@ -170,6 +176,24 @@ function boot() {
     boss: ['이번엔 다를걸?', '거대한 로봇이 내려왔어요!', '출동!', '충격파는 점프로 피하고, 핵이 빛날 때 공격!'],
     end: ['로봇이 쓰러지자 크리스탈의 힘이 돌아가요!', '얼어붙었던 나무가 다시 빛나요!', '으아앙~!', '포위하던 기계들이 무너져요!', '흥! 화산에서 기다리고 있으마! 와하하!', '다음 이야기는 아직 만드는 중이에요. 자유롭게 달려보세요!'],
   };
+
+  // ---- 목소리 파일 이름표 (sounds/voice/아이디.mp3) ----
+  const WHO = { intro: ['narr', 'narr', 'narr', 'narr', 'gear', 'narr', stageIdx === 0 ? 'friend' : 'player'], q2: ['wrench', 'narr', 'friend'], q3: ['gear', 'wrench', 'narr', 'friend'],
+    flee: ['wrench', 'narr'], q4: ['narr'], boss: ['wrench', 'narr', 'wrench', 'narr'], end: ['narr', 'narr', 'wrench', 'narr', 'gear', stageIdx === 0 ? 'friend' : 'narr'] };
+  const VOICE = new Map(), voiceList = [];
+  const regVoice = (id, who, text) => { if (!VOICE.has(text)) { VOICE.set(text, { id, who }); voiceList.push({ id, who, text }); } };
+  for (const [k, arr] of Object.entries(STORY)) (Array.isArray(arr) ? arr : [arr]).forEach((t, i) => regVoice(`s${stageIdx + 1}_${k}_${i + 1}`, (WHO[k] || [])[i] || 'narr', t));
+  for (const [kind, o] of Object.entries(LINES)) for (const [k, t] of Object.entries(o)) regVoice(`char_${kind}_${k}`, kind, t);
+  const SEED_LINE = `이 땅을 아끼는 친구야... 내 힘을 빌려줄게! (링 ${CFG.super.ringsNeeded}개를 모으고 땅에서 점프를 꾹!)`;
+  regVoice(`s${stageIdx + 1}_crystal`, 'crystal', SEED_LINE);
+  cine.onLine = (text) => {
+    const v = VOICE.get(text);
+    if (!v) { stopVoice(); return; }
+    const id = v.who === 'friend' ? `${v.id}_${RADIO_FRIEND[pl.kind]}` : v.who === 'player' ? `${v.id}_${pl.kind}` : v.id;
+    playVoice(id);
+  };
+  cine.onStop = () => stopVoice();
+  window.__soundCatalog = () => ({ sfx: SFX_INFO, bgm: BGM_INFO, voice: voiceList, friendKinds: [...new Set(Object.values(RADIO_FRIEND))], stage: stageIdx });
 
   // 하늘에 뜬 닥터 기어 홀로그램을 보여주는 장면
   const gearShot = (ang, text, extra = {}) => {
@@ -280,19 +304,20 @@ function boot() {
       text: () => stageIdx + 1 < STAGES.length ? `아무 방향으로나 맵 끝까지 달려가면 ${NAMES.stages[stageIdx + 1]}(으)로!` : '다음 이야기는 아직 만드는 중이에요! 자유롭게 달려보세요',
       done: () => false },
   ];
-  function bossDefeated() { SFX.quest(); game.hud.setBoss(null); for (const p of game.players) p.shake = 1.2; }
+  function bossDefeated() { game.musicHold = 9; SFX.quest(); game.hud.setBoss(null); for (const p of game.players) p.shake = 1.2; }
   const questText = (Q) => (typeof Q.text === 'function' ? Q.text() : Q.text);
-  function startQuest(i) {
+  function startQuest(i, skipIntro = false) {
     q.i = i;
     const Q = quests[i];
     const go = () => { Q.introEnd?.(); Q.start?.(); game.hud.setQuest(i < 5 ? `퀘스트 ${i + 1} / 5 — ${Q.title}` : Q.title, questText(Q)); SFX.quest(); };
-    if (Q.intro) playCine(Q.intro(), go); else go();
+    if (Q.intro && !skipIntro) playCine(Q.intro(), go); else go();
   }
   function completeQuest() {
     const Q = quests[q.i];
     SFX.quest(); game.hud.toast('✅ 퀘스트 완료!', 'gold');
     q.i = -2; // 잠깐 멈춤
     const idx = quests.indexOf(Q);
+    q.pending = idx + 1;
     const next = () => { Q.outroEnd?.(); startQuest(idx + 1); };
     if (Q.outro) setTimeout(() => playCine(Q.outro(), next), 900); else next();
   }
@@ -336,7 +361,7 @@ function boot() {
       SFX.crystal();
       game.hud.toast(`🌱 ${CRY_NAME}이(가) 씨앗을 보내줬어요! (${n}/3)`, 'gold');
       if (n >= 3) {
-        const line = { ...playerShot(`이 땅을 아끼는 친구야... 내 힘을 빌려줄게! (링 ${CFG.super.ringsNeeded}개를 모으고 땅에서 점프를 꾹!)`, `${CRY_NAME}:`), dur: 3.5 };
+        const line = { ...playerShot(SEED_LINE, `${CRY_NAME}:`), dur: 3.5 };
         if (!cine.active && !(game.boss && game.boss.alive && game.boss.spawned)) setTimeout(() => { if (!cine.active) playCine([line]); }, 400);
         else game.hud.toast(`✨ ${CRY_NAME}: 내 힘을 빌려줄게! 링 ${CFG.super.ringsNeeded}개 + 땅에서 점프 꾹!`, 'gold');
       }
@@ -371,10 +396,12 @@ function boot() {
   }
 
   // ---- 게임 진행 (한 프레임) ----
-  let acc = 0, started = false, clockReset = false;
+  let acc = 0, started = false, clockReset = false, paused = false;
   const STEP = 1 / 60;
   function tick(dt) {
     const input = game.input;
+    game.musicHold = Math.max(0, (game.musicHold || 0) - dt);
+    playMusic(game.musicHold > 0 ? 'clear' : cine.active ? 'story' : (game.boss && game.boss.alive && game.boss.spawned) ? 'boss' : pl.superOn ? 'super' : `stage${stageIdx + 1}`);
     if (cine.active) { // 이야기 장면 중에는 플레이어·몬스터 정지
       game.time += dt;
       cine.update(dt);
@@ -445,6 +472,7 @@ function boot() {
       const t = game.time * 0.35;
       pl.updateView(dt);
       pl.view.root.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), game.time * 0.6);
+      camera.up.set(0, 1, 0);
       camera.position.set(pl.pos.x + Math.sin(t) * 5.5, pl.pos.y + 1.0, pl.pos.z + Math.cos(t) * 5.5);
       camera.lookAt(pl.pos.x, pl.pos.y - 0.6, pl.pos.z);
       game.gfx.update(dt, game.time, pl.pos);
@@ -452,7 +480,7 @@ function boot() {
       game.gfx.render();
       return;
     }
-    tick(dt);
+    if (!paused) tick(dt);
     game.gfx.render();
     game.input.endFrame();
   }
@@ -477,6 +505,41 @@ function boot() {
   document.getElementById('title').textContent = NAMES.gameTitle;
   if (isTouch) document.getElementById('help-pc').style.display = 'none';
   else document.getElementById('help-touch').style.display = 'none';
+
+  // ---- 저장하기 / 불러오기 ----
+  function getSaveData() {
+    const cps = W.checkpoints.map((c, i) => (c.active ? i : -1)).filter((i) => i >= 0);
+    const near = W.nearestCheckpoint(pl.pos);
+    return {
+      v: 1, stage: stageIdx, hard: game.hard, char: pl.kind, quest: q.i >= 0 ? q.i : (q.pending ?? 0),
+      rings: pl.rings, health: Math.max(1, Math.round(pl.health)), hearts: pl.storedHearts,
+      seed: missionSeed, missionsDone: game.missions.list.map((m) => m.done), stats: pl.stats, kills,
+      checkpoints: cps, cp: W.checkpoints.indexOf(near), secret: pl.secretFound,
+    };
+  }
+  function applySave(d) {
+    pl.rings = d.rings || 0; pl.health = d.health || 100; pl.storedHearts = d.hearts || 0;
+    Object.assign(pl.stats, d.stats || {}); pl.secretFound = !!d.secret;
+    if (pl.secretFound && W.secret) W.secret.mesh.visible = false;
+    (d.missionsDone || []).forEach((done, i) => { if (game.missions.list[i]) game.missions.list[i].done = done; });
+    Object.assign(kills, d.kills || {});
+    for (const i of d.checkpoints || []) if (W.checkpoints[i]) { W.activateCheckpoint(W.checkpoints[i]); W.checkpoints[i].flash = 0; }
+    // 이미 지나간 퀘스트의 결과를 맵에 반영
+    const dead = (tag) => { const c = core(tag); if (c) { c.alive = false; c.mesh.visible = false; c.shielded = false; } };
+    if (d.quest >= 1) dead('base');
+    if (d.quest >= 2) dead('factory');
+    if (d.quest === 3 || d.quest === 4) sci.show(W.labPad.clone().add(V(0, 7, 0)));
+    if (d.quest >= 5) { W.removeBarrier(); W.barrierSink = 9; W.restoreTree(); }
+    const cp = W.checkpoints[d.cp] || W.startCheckpoint;
+    pl.spawnAt(cp.pos.clone().add(V(0, 0.3, 0)), 0);
+  }
+  game.pauseMenu = new PauseMenu({
+    onPause: (v) => { paused = v; if (!v) clockReset = true; },
+    getSaveData,
+    onLoad: (slot) => { const d = readSave(slot); if (d) location.href = `?stage=${d.stage}&load=${slot}`; },
+    onQuit: () => { location.href = location.pathname; },
+  });
+  game.getSaveData = getSaveData;
 
   async function startGame() {
     initAudio();
@@ -507,7 +570,24 @@ function boot() {
   game.startGame = startGame;
   game.setCharacter = setCharacter;
   document.getElementById('loading').classList.add('hidden');
-  if (stageIdx > 0 && carry) { sessionStorage.removeItem('sf-carry'); startGame(); }
+  // 시작 화면: 이어하기
+  const contBtn = document.getElementById('continue-btn'), loadList = document.getElementById('load-list');
+  if (hasAnySave() && !LOAD) {
+    contBtn.style.display = '';
+    contBtn.addEventListener('click', () => { loadList.style.display = loadList.style.display === 'none' ? '' : 'none'; showLoadList(loadList, (slot) => { const d = readSave(slot); location.href = `?stage=${d.stage}&load=${slot}`; }); });
+  }
+  if (LOAD) { // 저장한 곳에서 이어하기
+    initAudio();
+    document.getElementById('start').classList.add('hidden');
+    applySave(LOAD);
+    game.cam.yaw = pl.yaw; game.cam.first = true;
+    if (game.hard) for (const e of game.enemies.list) { e.maxHp = Math.round(e.T.hp * CFG.hard.enemyHp); e.hp = Math.min(e.hp, e.maxHp) || e.maxHp; }
+    showStageInfo();
+    started = true; clock.getDelta();
+    game.hud.hide(false); game.pauseMenu.enable(true);
+    startQuest(Math.min(LOAD.quest || 0, quests.length - 1), true);
+    game.hud.toast(`📂 ${loadSlot}번 칸에서 이어하기!`, 'gold');
+  } else if (stageIdx > 0 && carry) { sessionStorage.removeItem('sf-carry'); startGame(); }
   else document.getElementById('start').classList.remove('hidden');
   frame();
 }

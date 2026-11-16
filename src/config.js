@@ -10,7 +10,7 @@ export const CFG = {
     turnRate: 8,          // 방향 전환 빠르기
     airControl: 0.55,     // 공중 조작 비율
     gravity: 40,          // 중력
-    jumpVel: 15.5,        // 점프 힘
+    jumpVel: 26.8,        // 점프 힘 (높이는 힘의 제곱에 비례: 15.5 → 26.8 이면 약 3배 높이)
     dashSpeed: 34,        // 2단 점프 돌진 속도
     dashLift: 3,          // 돌진할 때 살짝 떠오르는 힘
     spinMaxTaps: 10,      // 스핀 최대 연타 횟수
@@ -34,10 +34,10 @@ export const CFG = {
   // 자동차처럼 단계별 속도 (1단 → 2단 → 3단)
   gears: [
     { cap: 11, accel: 20 },   // 1단: 막 달리기 시작
-    { cap: 19, accel: 10 },   // 2단: (예전 최고 속도)
-    { cap: 32, accel: 7 },    // 3단: (예전 돌진 속도 정도)
+    { cap: 19, accel: 16 },   // 2단: (예전 최고 속도)
+    { cap: 32, accel: 12 },   // 3단: (예전 돌진 속도 정도)
   ],
-  gearUpTime: 0.8,        // 그 단계 최고 속도로 이만큼(초) 달리면 다음 단계로
+  gearUpTime: 0.35,        // 그 단계 최고 속도로 이만큼(초) 달리면 다음 단계로
   characters: {           // 캐릭터별 속도·점프 배율
     speed: { speed: 1.0, jump: 1.0 },
     flyer: { speed: 0.9, jump: 1.05 },
@@ -88,9 +88,11 @@ export const CFG = {
     flightMinFall: -5,    // 가장 빨리 떨어지는 속도
   },
   loop: {
-    gravityScale: 0.5,    // 루프 안에서 중력 비율
-    push: 9,              // 루프 안에서 방향키를 누르고 있을 때 가속
-    entryAlign: 0.85,     // 루프 입구 방향과 얼마나 똑바로 들어가야 하는지 (1 = 완전 똑바로)
+    radius: 14,           // 루프 크기 (반지름)
+    width: 7.5,           // 루프 트랙 폭 (벗어나면 떨어짐)
+    gravityScale: 0.4,    // 루프 안에서 중력 비율 (클수록 더 빨라야 돌 수 있음)
+    push: 5,              // 루프 안에서 앞 방향키를 누르고 있을 때 가속
+    sideAccel: 16,        // 루프 안에서 옆으로 움직이는 힘
   },
   water: { runSpeed: 20, swimDepth: -1.0, slow: 0.55 },
   boostPad: { speed: 40 },

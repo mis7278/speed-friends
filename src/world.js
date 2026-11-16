@@ -584,11 +584,11 @@ export class World {
     return r;
   }
 
-  _addLoop(base, fwd, R = 9, offset = 5) {
+  _addLoop(base, fwd, R = CFG.loop.radius, offset = CFG.loop.width + 1.5) {
     base = base.clone(); base.y = terrainHeight(base.x, base.z);
     fwd = fwd.clone().normalize();
     const side = new THREE.Vector3(fwd.z, 0, -fwd.x);
-    const loop = { base, fwd, side, R, offset, length: 2 * Math.PI * R, width: 4.6 };
+    const loop = { base, fwd, side, R, offset, length: 2 * Math.PI * R, width: CFG.loop.width };
     loop.pathAt = (t, out = new THREE.Vector3()) => {
       const a = t * Math.PI * 2;
       return out.copy(base).addScaledVector(fwd, R * Math.sin(a)).addScaledVector(side, offset * (t - 0.5)).setY(base.y + R * (1 - Math.cos(a)));
@@ -628,13 +628,13 @@ export class World {
     }
     // 받침 기둥
     for (const s of [-1, 1]) {
-      const q = base.clone().addScaledVector(side, s * (offset / 2 + 3.5));
+      const q = base.clone().addScaledVector(side, s * (offset / 2 + loop.width / 2 + 1.5));
       this.put(BASE.box, 0x5d646e, q.x, base.y + R * 0.5, q.z, 0.8, R, 0.8);
       this.put(BASE.box, 0xffc233, q.x, base.y + R, q.z, 1.2, 0.6, 1.2);
     }
     this._occupy(base.x, base.z, R + 6);
     this.loops.push(loop);
-    for (let i = 1; i < 10; i++) { const q = loop.pathAt(i / 10); q.lerp(loop.centerAt(i / 10), 0.12); this.ringSpots.push(q); }
+    for (let i = 1; i < 10; i++) { const q = loop.pathAt(i / 10); q.lerp(loop.centerAt(i / 10), 0.09); this.ringSpots.push(q); }
     return loop;
   }
 
@@ -1019,7 +1019,7 @@ export class World {
     const L1 = this._addLoop(new THREE.Vector3(startRoadX(150), 0, 150), startRoadDir(150));
     this.questTargets.loop = L1.entry.clone();
     this._addBoostPad(P(268), startRoadDir(268));
-    this._addLoop(new THREE.Vector3(startRoadX(300), 0, 300), startRoadDir(300), 10, 6);
+    this._addLoop(new THREE.Vector3(startRoadX(300), 0, 300), startRoadDir(300));
     this._addRamp(new THREE.Vector3(startRoadX(220), 0, 220), startRoadDir(220), 8, 14, 3.5);
     this._ringArc(new THREE.Vector3(startRoadX(242), 0, 242), startRoadDir(242), 26, 6, 9, 3);
     // 길가: 울타리, 가로등, 표지판
@@ -1047,7 +1047,7 @@ export class World {
     for (const r of this.ringSpots) if (Number.isNaN(r.y)) r.y = this.groundAt(r.x, r.z) + 1.2;
     for (const th of thLoops) {
       const d = ringDir(th);
-      this._addLoop(ringPoint(th), d, 9.5, 5);
+      this._addLoop(ringPoint(th), d);
       this._addBoostPad(ringPoint(th - 0.07), ringDir(th - 0.07));
       this._addBoostPad(ringPoint(th + 0.8), ringDir(th + 0.8));
     }

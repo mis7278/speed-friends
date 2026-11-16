@@ -33,6 +33,7 @@ export class Cinematic {
     this.who.textContent = s.who ? s.who + ' ' : '';
     this.line.textContent = s.text || '';
     this.line.parentElement.classList.remove('pop'); void this.line.offsetWidth; this.line.parentElement.classList.add('pop');
+    this.onLine?.(s.text, s.who);
   }
   next() { if (this.t > 0.35) this._next(); }
   skip() { if (!this.active) return; for (let k = this.i + 1; k < this.shots.length; k++) this.shots[k].enter?.(); this.end(); }
@@ -40,6 +41,7 @@ export class Cinematic {
     if (!this.active) return;
     this.active = false;
     this.el.classList.remove('on');
+    this.onStop?.();
     const cb = this.onEnd; this.onEnd = null;
     cb?.();
   }
@@ -49,6 +51,7 @@ export class Cinematic {
     this.t += dt;
     const k = ease(Math.min(1, this.t / s.dur));
     const f = typeof s.from === 'function' ? s.from() : s.from, to = typeof s.to === 'function' ? s.to() : (s.to || f);
+    this.camera.up.set(0, 1, 0);
     this.camera.position.copy(f.pos).lerp(to.pos, k);
     const look = f.look.clone().lerp(to.look, k);
     this.camera.lookAt(look);

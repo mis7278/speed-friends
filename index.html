@@ -143,6 +143,21 @@
     .modes button { font-size: 12px; padding: 4px 10px; }
     .help { display: none; }
   }
+  /* 멈춤 메뉴 */
+  .pause-btn { position: fixed; z-index: 12; top: max(10px, env(safe-area-inset-top)); left: 50%; transform: translateX(calc(-50% + min(300px, 28vw))); width: 44px; height: 44px; border-radius: 50%; border: 3px solid #fff; background: rgba(10,20,40,.6); color: #fff; font-size: 18px; cursor: pointer; }
+  .pmenu { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(0,10,30,.55); }
+  .pmenu.on { display: flex; }
+  .pmenu-panel { background: linear-gradient(160deg, #1d4fb8, #0f2d6e); border: 4px solid #fff; border-radius: 22px; padding: 18px 22px; display: flex; flex-direction: column; gap: 10px; min-width: min(420px, 86vw); max-height: 92vh; overflow: auto; }
+  .pmenu-title { font-size: 22px; font-weight: 900; text-align: center; margin-bottom: 4px; }
+  .pmenu-title small, .pmenu-btn small { font-size: 12px; opacity: .8; font-weight: 700; }
+  .pmenu-btn, #continue-btn { font-family: inherit; font-size: 17px; font-weight: 800; color: #fff; background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.5); border-radius: 14px; padding: 10px 14px; cursor: pointer; text-align: left; }
+  .pmenu-btn.big { background: #ffb02e; border-color: #fff; text-align: center; font-size: 20px; }
+  .pmenu-btn.back { text-align: center; opacity: .85; }
+  .pmenu-btn.empty { opacity: .55; cursor: default; }
+  .slot-empty { opacity: .7; }
+  .pmenu-toast { position: fixed; top: 20%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.75); padding: 10px 20px; border-radius: 20px; font-weight: 900; }
+  #continue-btn { text-align: center; }
+  #load-list { display: flex; flex-direction: column; gap: 6px; }
   /* 시네마틱 */
   .cine { position: fixed; inset: 0; z-index: 15; display: none; }
   .cine.on { display: block; }
@@ -220,6 +235,8 @@
   <div class="modes" id="modes" style="display:none"><button data-mode="normal" class="sel">🌳 처음 모험</button><button data-mode="hard">⭐ 도전 모드 <small>(더 어려움 · 씨앗 없이 슈퍼)</small></button></div>
   <div class="cards" id="cards"></div>
   <button id="start-btn">시작!</button>
+  <button id="continue-btn" style="display:none">📂 이어하기</button>
+  <div id="load-list" style="display:none"></div>
   <button id="install-btn" style="display:none">📲 앱으로 설치하기</button>
   <div id="ios-hint" style="display:none">📲 앱처럼 설치하기: 아래(아이패드는 위) <b>공유 버튼 <span class="ios-share">⬆</span></b> → <b>"홈 화면에 추가"</b></div>
   <div class="help" id="help-pc">
