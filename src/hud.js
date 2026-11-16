@@ -1,0 +1,232 @@
+// 화면 표시 (체력, 링, 속도 단계, 미니맵, 미션, 퀘스트, 아이템 칸, 보스 체력, 터치 조작)
+import { NAMES } from './names.js';
+import { CFG } from './config.js';
+
+const $ = (tag, cls, parent, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; if (parent) parent.appendChild(e); return e; };
+
+export class HUD {
+  constructor(input) {
+    this.input = input;
+    const root = $('div', 'hud', document.body);
+    this.root = root;
+
+    // 왼쪽 위: 체력 + 링
+    const tl = $('div', 'hud-tl', root);
+    const hp = $('div', 'hp', tl);
+    $('div', 'hp-label', hp, '체력');
+    const bar = $('div', 'hp-bar', hp);
+    this.hpFill = $('div', 'hp-fill', bar);
+    this.hpText = $('div', 'hp-text', bar, '100%');
+    const rings = $('div', 'rings', tl);
+    $('div', 'ring-icon', rings, '★');
+    this.ringText = $('div', 'ring-text', rings, '0');
+    this.superText = $('div', 'super-text', tl, '');
+    this.bigCry = $('div', 'big-cry', tl, '');
+    this.gauge = $('div', 'gauge', tl, '<div class="gauge-label">비행</div><div class="gauge-bar"><div class="gauge-fill"></div></div>');
+    this.gaugeFill = this.gauge.querySelector('.gauge-fill');
+
+    // 왼쪽 아래: 속도 단계
+    this.speedo = $('div', 'speedo', root);
+    this.gearCells = [1, 2, 3].map((g) => $('div', 'gear-cell', this.speedo, String(g)));
+    this.speedText = $('div', 'speed-text', this.speedo, '0');
+
+    // 오른쪽 위: 미니맵 + 크리스탈 미션
+    const tr = $('div', 'hud-tr', root);
+    this.mapCanvas = $('canvas', 'minimap', tr);
+    this.mapCanvas.width = 180; this.mapCanvas.height = 180;
+    this.mapCtx = this.mapCanvas.getContext('2d');
+    const ms = $('div', 'missions', tr);
+    this.missionsBox = ms;
+    this.missionsTitle = $('div', 'missions-title', ms, `🌱 ${NAMES.trial}`);
+    this.missionRows = [0, 1, 2].map(() => $('div', 'mission-row', ms, ''));
+
+    // 가운데 위: 퀘스트 + 보스 체력
+    this.quest = $('div', 'quest', root);
+    this.questTitle = $('div', 'quest-title', this.quest, '');
+    this.questText = $('div', 'quest-text', this.quest, '');
+    this.questDist = $('div', 'quest-dist', this.quest, '');
+    this.boss = $('div', 'boss', root, `<div class="boss-name"></div><div class="boss-bar"><div class="boss-fill"></div></div>`);
+    this.bossName = this.boss.querySelector('.boss-name'); this.bossFill = this.boss.querySelector('.boss-fill');
+
+    this.toastBox = $('div', 'toast-box', root);
+
+    // 아래 가운데: 스핀 게이지 + 아이템 칸
+    this.charge = $('div', 'charge', root);
+    this.chargeCells = [];
+    for (let i = 0; i < CFG.player.spinMaxTaps; i++) this.chargeCells.push($('div', 'charge-cell', this.charge));
+    const items = $('div', 'items', root);
+    this.slotCrystal = $('div', 'slot', items, `<div class="slot-key">1</div><div class="slot-icon">🌱</div><div class="slot-count">0/3</div>`);
+    this.slotHeart = $('div', 'slot', items, `<div class="slot-key">2</div><div class="slot-icon">❤️</div><div class="slot-count">0</div>`);
+    this.slotCrystal.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressTouch('item1'); setTimeout(() => input.releaseTouch('item1'), 50); });
+    this.slotHeart.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressTouch('item2'); setTimeout(() => input.releaseTouch('item2'), 50); });
+
+    this.flashEl = $('div', 'flash', root);
+    this.fade = $('div', 'fade', root);
+    if (input.isTouch) this._touchControls();
+    this.hide(true);
+  }
+
+  hide(v) { this.root.style.display = v ? 'none' : ''; }
+  // 땅 이름, 되찾은 대지의 크리스탈 5칸, 도전 모드 표시
+  setStageInfo(place, crystals, colors, hard) {
+    this.missionsTitle.textContent = hard ? '⭐ 도전 모드 — 씨앗 없이 슈퍼 변신 가능!' : `🌱 ${place}의 ${NAMES.trial} (씨앗을 모아 슈퍼 변신)`;
+    this.missionRows.forEach((r) => (r.style.display = hard ? 'none' : ''));
+    this.bigCry.innerHTML = crystals.map((c, i) => `<span class="${c ? 'on' : ''}" style="--c:${colors[i]}"></span>`).join('');
+    this.hard = hard;
+  }
+
+  _touchControls() {
+    const input = this.input;
+    document.body.classList.add('touch');
+    const layer = $('div', 'touch-layer', this.root);
+    const joyBase = $('div', 'joy-base', layer);
+    const joyKnob = $('div', 'joy-knob', joyBase);
+    let joyId = null, joyCx = 0, joyCy = 0, camId = null, camX = 0, camY = 0;
+    const R = 55;
+    layer.addEventListener('pointerdown', (e) => {
+      if (e.clientX < window.innerWidth * 0.45 && joyId === null) {
+        joyId = e.pointerId; joyCx = e.clientX; joyCy = e.clientY;
+        joyBase.style.left = (joyCx - R) + 'px'; joyBase.style.top = (joyCy - R) + 'px';
+        joyBase.classList.add('on');
+        input.touchMove.active = true; input.touchMove.x = 0; input.touchMove.y = 0;
+      } else if (camId === null) { camId = e.pointerId; camX = e.clientX; camY = e.clientY; }
+      layer.setPointerCapture(e.pointerId);
+    });
+    layer.addEventListener('pointermove', (e) => {
+      if (e.pointerId === joyId) {
+        let dx = e.clientX - joyCx, dy = e.clientY - joyCy;
+        const l = Math.hypot(dx, dy);
+        if (l > R) { dx = dx / l * R; dy = dy / l * R; }
+        joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+        input.touchMove.x = dx / R; input.touchMove.y = -dy / R;
+      } else if (e.pointerId === camId) {
+        input.touchCamera(e.clientX - camX, e.clientY - camY);
+        camX = e.clientX; camY = e.clientY;
+      }
+    });
+    const end = (e) => {
+      if (e.pointerId === joyId) {
+        joyId = null; input.touchMove.active = false; input.touchMove.x = 0; input.touchMove.y = 0;
+        joyKnob.style.transform = ''; joyBase.classList.remove('on');
+      }
+      if (e.pointerId === camId) camId = null;
+    };
+    layer.addEventListener('pointerup', end);
+    layer.addEventListener('pointercancel', end);
+    const mk = (name, label, cls) => {
+      const b = $('div', 'tbtn ' + cls, this.root, label);
+      b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('down'); input.pressTouch(name); });
+      const up = () => { b.classList.remove('down'); input.releaseTouch(name); };
+      b.addEventListener('pointerup', up); b.addEventListener('pointercancel', up);
+      return b;
+    };
+    mk('a', 'A<small>점프</small>', 'tbtn-a');
+    mk('b', 'B<small>스핀</small>', 'tbtn-b');
+  }
+
+  toast(text, cls = '') {
+    const t = $('div', 'toast ' + cls, this.toastBox, text);
+    setTimeout(() => t.classList.add('out'), 2400);
+    setTimeout(() => t.remove(), 3000);
+  }
+  flash(color) {
+    this.flashEl.style.transition = 'none'; this.flashEl.style.background = color; this.flashEl.style.opacity = 1;
+    void this.flashEl.offsetWidth;
+    this.flashEl.style.transition = 'opacity 1.2s'; this.flashEl.style.opacity = 0;
+  }
+  setQuest(title, text) {
+    this.questTitle.textContent = title;
+    this.questText.textContent = text;
+    this.quest.classList.remove('pop'); void this.quest.offsetWidth; this.quest.classList.add('pop');
+  }
+  setBoss(name, frac) {
+    if (name == null) { this.boss.classList.remove('on'); return; }
+    this.boss.classList.add('on');
+    this.bossName.textContent = name;
+    this.bossFill.style.width = Math.max(0, frac * 100) + '%';
+  }
+
+  update(p, missions, questDist, stats) {
+    const hp = Math.max(0, Math.round(p.health));
+    this.hpFill.style.width = hp + '%';
+    this.hpFill.style.background = hp > 50 ? '#3ddc5a' : hp > 25 ? '#ffc233' : '#ff4040';
+    this.hpText.textContent = hp + '%';
+    this.ringText.textContent = p.rings;
+    this.ringText.parentElement.classList.toggle('zero', p.rings === 0);
+    let st = '';
+    if (p.superOn) st = `✨ ${NAMES.superForm} 변신 중! (속도 ×${CFG.super.speedMul})`;
+    else if (p.canTransform()) st = `✨ 점프를 꾹 눌러 ${NAMES.superForm} 변신!`;
+    if (p.kind === 'blink' && p.superOn) st += p.ultCD > 0 ? ` 🌑 ${Math.ceil(p.ultCD)}초` : ' 🌑 점프 꾹: 블랙홀!';
+    if (p.kind === 'flyer' && p.superOn && p.tornadoCD > 0) st += ` 🌪 ${Math.ceil(p.tornadoCD)}초`;
+    this.superText.textContent = st;
+    const showGauge = p.kind === 'flyer' && !p.superOn && p.flyGauge < CFG.flyer.gaugeMax;
+    this.gauge.classList.toggle('on', showGauge);
+    if (showGauge) this.gaugeFill.style.width = (p.flyGauge / CFG.flyer.gaugeMax * 100) + '%';
+    // 속도 단계
+    this.gearCells.forEach((c, i) => { c.classList.toggle('lit', i < p.gear && p.s > 0.5); c.classList.toggle('max', p.gear === 3 && i === 2 && p.s > 0.5); });
+    const sp = p.state === 'air' ? Math.hypot(p.vel.x, p.vel.z) : Math.abs(p.s);
+    this.speedText.textContent = Math.round(sp * 3.6) + ' km/h';
+    this.speedo.classList.toggle('super', p.superOn);
+
+    this.slotCrystal.querySelector('.slot-count').textContent = this.hard ? '∞' : `${missions.crystals}/3`;
+    this.slotCrystal.classList.toggle('full', this.hard || missions.crystals >= 3);
+    this.slotHeart.querySelector('.slot-count').textContent = p.storedHearts;
+    this.slotHeart.classList.toggle('empty', p.storedHearts === 0);
+    missions.list.forEach((m, i) => {
+      const row = this.missionRows[i];
+      const cur = Math.min(m.target, stats[m.stat] || 0);
+      const txt = m.done ? `✅ ${m.text(m.target)}` : `⬜ ${m.text(m.target)}${m.target > 1 ? ` (${cur}/${m.target})` : ''}`;
+      if (row.textContent !== txt) { row.textContent = txt; row.classList.toggle('done', m.done); }
+    });
+    const show = p.state === 'charge';
+    this.charge.classList.toggle('on', show);
+    if (show) this.chargeCells.forEach((c, i) => c.classList.toggle('lit', i < p.chargeLevel));
+    this.questDist.textContent = questDist != null ? `${Math.round(questDist)}m` : '';
+  }
+
+  drawMinimap(player, world, enemies, questTarget, camYaw, boss) {
+    const ctx = this.mapCtx, W = 180, H = 180, scale = 0.38;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(W / 2, H / 2, W / 2 - 2, 0, Math.PI * 2); ctx.clip();
+    ctx.fillStyle = '#2d4a30'; ctx.fillRect(0, 0, W, H);
+    const cs = Math.cos(camYaw), sn = Math.sin(camYaw);
+    const S = (x, z) => { const dx = x - player.pos.x, dz = z - player.pos.z; return [W / 2 + (-dx * cs + dz * sn) * scale, H / 2 - (dx * sn + dz * cs) * scale]; };
+    // 지형 그림 (카메라 방향이 위로 오도록 돌려서)
+    if (world.mapCanvas) {
+      const half = world.mapHalf, k = half * 2 / world.mapCanvas.width;
+      const X0 = -half - player.pos.x, Z0 = -half - player.pos.z;
+      ctx.save();
+      ctx.setTransform(-cs * scale * k, -sn * scale * k, sn * scale * k, -cs * scale * k, W / 2 + scale * (-cs * X0 + sn * Z0), H / 2 + scale * (-sn * X0 - cs * Z0));
+      ctx.globalAlpha = 0.9;
+      ctx.drawImage(world.mapCanvas, 0, 0);
+      ctx.restore();
+    }
+    ctx.fillStyle = '#ffb02e';
+    for (const L of world.loops) { const [px, pz] = S(L.base.x, L.base.z); ctx.beginPath(); ctx.arc(px, pz, 4, 0, 7); ctx.fill(); }
+    for (const c of world.checkpoints) { const [px, pz] = S(c.pos.x, c.pos.z); ctx.fillStyle = c.active ? '#ffe14d' : '#9a8a40'; ctx.fillRect(px - 3, pz - 3, 6, 6); }
+    ctx.fillStyle = '#ff3030';
+    for (const e of enemies.list) { if (!e.alive || e.asleep) continue; const [px, pz] = S(e.pos.x, e.pos.z); ctx.beginPath(); ctx.arc(px, pz, 2.2, 0, 7); ctx.fill(); }
+    const pin = (x, z, color, r) => {
+      let [px, pz] = S(x, z);
+      const dx = px - W / 2, dz = pz - H / 2, l = Math.hypot(dx, dz), max = W / 2 - 10;
+      if (l > max) { px = W / 2 + dx / l * max; pz = H / 2 + dz / l * max; }
+      ctx.fillStyle = color; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(px, pz, r, 0, 7); ctx.fill(); ctx.stroke();
+    };
+    if (questTarget) pin(questTarget.x, questTarget.z, '#ffe600', 6);
+    if (boss && boss.spawned && boss.alive) pin(boss.pos.x, boss.pos.z, '#ff2020', 8);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.rotate(-(player.yaw - camYaw));
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(0, -8); ctx.lineTo(6, 6); ctx.lineTo(0, 3); ctx.lineTo(-6, 6); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(W / 2, H / 2, W / 2 - 2, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  setFade(v) { this.fade.style.opacity = v; }
+}

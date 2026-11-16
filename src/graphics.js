@@ -1,0 +1,379 @@
+// 그래픽: 하늘, 구름, 햇빛과 그림자, 물, 바람에 흔들리는 풀, 연기, 빛 번짐 효과
+import * as THREE from '../vendor/three.module.js';
+import { EffectComposer } from '../vendor/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from '../vendor/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../vendor/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
+import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES } from './world.js';
+
+const NOISE_GLSL = `
+float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float vn(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(h21(i), h21(i + vec2(1,0)), u.x), mix(h21(i + vec2(0,1)), h21(i + vec2(1,1)), u.x), u.y); }
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++) { s += a * vn(p); p *= 2.03; a *= 0.5; } return s; }
+`;
+
+export function createRenderer(isTouch) {
+  const renderer = new THREE.WebGLRenderer({ antialias: !isTouch, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, isTouch ? 1.25 : 1.75));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  return renderer;
+}
+
+function cloudTexture() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const g = cv.getContext('2d');
+  for (let i = 0; i < 14; i++) {
+    const x = 30 + Math.random() * 68, y = 38 + Math.random() * 50, r = 16 + Math.random() * 24;
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+  }
+  const t = new THREE.CanvasTexture(cv); return t;
+}
+
+// 카메라를 향하는 판 여러 개 (구름, 연기) — 한 번에 그림
+class Billboards {
+  constructor(count, tex, { fog = false, shade = true, additive = false } = {}) {
+    const geo = new THREE.InstancedBufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0], 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+    geo.setIndex([0, 1, 2, 0, 2, 3]);
+    this.data = new Float32Array(count * 4);   // x y z size
+    this.col = new Float32Array(count * 4);    // r g b alpha
+    this.aData = new THREE.InstancedBufferAttribute(this.data, 4); this.aData.setUsage(THREE.DynamicDrawUsage);
+    this.aCol = new THREE.InstancedBufferAttribute(this.col, 4); this.aCol.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('iData', this.aData); geo.setAttribute('iCol', this.aCol);
+    geo.instanceCount = count;
+    this.mat = new THREE.ShaderMaterial({
+      uniforms: { map: { value: tex }, shadeCol: { value: new THREE.Color(0xb8c8e0) }, ...THREE.UniformsLib.fog },
+      vertexShader: `
+        attribute vec4 iData; attribute vec4 iCol; varying vec2 vUv; varying vec4 vCol;
+        #include <fog_pars_vertex>
+        void main(){
+          vUv = uv; vCol = iCol;
+          vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
+          vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
+          vec3 wp = iData.xyz + (right * position.x + up * position.y * 0.62) * iData.w;
+          vec4 mvPosition = viewMatrix * vec4(wp, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
+        }`,
+      fragmentShader: `
+        uniform sampler2D map; uniform vec3 shadeCol; varying vec2 vUv; varying vec4 vCol;
+        #include <fog_pars_fragment>
+        void main(){
+          vec4 t = texture2D(map, vUv);
+          vec3 c = vCol.rgb * ${shade ? 'mix(shadeCol, vec3(1.0), smoothstep(0.15, 0.85, vUv.y))' : 'vec3(1.0)'};
+          gl_FragColor = vec4(c, t.a * vCol.a);
+          if (gl_FragColor.a < 0.01) discard;
+          #include <fog_fragment>
+        }`,
+      transparent: true, depthWrite: false, fog,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    });
+    this.mesh = new THREE.Mesh(geo, this.mat);
+    this.mesh.frustumCulled = false;
+  }
+  set(i, x, y, z, s, r, g, b, a) {
+    const d = this.data, c = this.col, k = i * 4;
+    d[k] = x; d[k + 1] = y; d[k + 2] = z; d[k + 3] = s;
+    c[k] = r; c[k + 1] = g; c[k + 2] = b; c[k + 3] = a;
+  }
+  flush() { this.aData.needsUpdate = true; this.aCol.needsUpdate = true; }
+}
+
+export class Graphics {
+  constructor(renderer, scene, camera, world, mobile) {
+    this.renderer = renderer; this.scene = scene; this.camera = camera; this.world = world; this.mobile = mobile;
+    const T = world.T;
+    this.T = T;
+    scene.background = new THREE.Color(T.skyHorizon);
+    scene.fog = new THREE.FogExp2(T.fog, T.fogDensity);
+    this.sunDir = new THREE.Vector3(0.45, 0.62, 0.35).normalize();
+
+    // ---- 빛 ----
+    this.hemi = new THREE.HemisphereLight(T.hemiSky, T.hemiGround, T.hemiInt);
+    scene.add(this.hemi);
+    this.sun = new THREE.DirectionalLight(T.sun, T.sunInt);
+    this.sun.castShadow = true;
+    const S = mobile ? 45 : 70;
+    this.sun.shadow.mapSize.set(mobile ? 1024 : 2048, mobile ? 1024 : 2048);
+    Object.assign(this.sun.shadow.camera, { left: -S, right: S, top: S, bottom: -S, near: 1, far: 600 });
+    this.sun.shadow.bias = -0.0004; this.sun.shadow.normalBias = 0.04;
+    scene.add(this.sun, this.sun.target);
+
+    this._sky();
+    this._clouds();
+    this._water();
+    if (T.grass) this._grass();
+    this._smoke();
+
+    // ---- 빛 번짐 (PC만) ----
+    if (!mobile) {
+      this.composer = new EffectComposer(renderer);
+      this.composer.addPass(new RenderPass(scene, camera));
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2), 0.32, 0.5, 0.88);
+      this.composer.addPass(this.bloom);
+      this.composer.addPass(new OutputPass());
+    }
+  }
+
+  resize(w, h) { this.composer?.setSize(w, h); }
+
+  _sky() {
+    const T = this.T;
+    this.skyMat = new THREE.ShaderMaterial({
+      uniforms: { top: { value: new THREE.Color(T.skyTop) }, horizon: { value: new THREE.Color(T.skyHorizon) }, bottom: { value: new THREE.Color(T.skyBottom) }, sunDir: { value: this.sunDir }, sunCol: { value: new THREE.Color(T.sun) }, time: { value: 0 } },
+      vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`,
+      fragmentShader: `
+        uniform vec3 top, horizon, bottom, sunDir, sunCol; uniform float time; varying vec3 vDir;
+        ${NOISE_GLSL}
+        void main(){
+          vec3 d = normalize(vDir); float h = d.y;
+          vec3 col = mix(horizon, top, pow(smoothstep(0.0, 0.65, h), 0.65));
+          col = mix(col, bottom, smoothstep(0.0, -0.25, h));
+          float sd = max(dot(d, sunDir), 0.0);
+          col += sunCol * (pow(sd, 900.0) * 6.0 + pow(sd, 40.0) * 0.25 + pow(sd, 4.0) * 0.12);
+          if (h > 0.0) {
+            vec2 uv = d.xz / (h + 0.12) * 0.9 + vec2(time * 0.004, time * 0.002);
+            float n = fbm(uv * 2.0);
+            float c = smoothstep(0.52, 0.85, n) * smoothstep(0.0, 0.3, h);
+            col = mix(col, vec3(1.0, 0.99, 0.97) + sunCol * pow(sd, 6.0) * 0.3, c * 0.75);
+          }
+          gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }`,
+      side: THREE.BackSide, depthWrite: false, fog: false,
+    });
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(100, 32, 16), this.skyMat);
+    this.sky.renderOrder = -10; this.sky.frustumCulled = false;
+    this.scene.add(this.sky);
+  }
+
+  _clouds() {
+    const N = this.mobile ? 160 : 320;
+    this.clouds = new Billboards(N, cloudTexture(), { fog: false, shade: true });
+    this.clouds.mat.uniforms.shadeCol.value.set(this.T.skyBottom).lerp(new THREE.Color(0x8090b0), 0.4);
+    this.cloudBase = [];
+    let i = 0;
+    while (i < N) {
+      const a = Math.random() * Math.PI * 2, r = 300 + Math.random() * 1800;
+      const cx = Math.cos(a) * r, cz = Math.sin(a) * r, cy = 210 + Math.random() * 120;
+      const n = 5 + Math.floor(Math.random() * 6), w = 60 + Math.random() * 80;
+      for (let k = 0; k < n && i < N; k++, i++) {
+        this.cloudBase.push([cx + (Math.random() - 0.5) * w, cy + (Math.random() - 0.3) * 18, cz + (Math.random() - 0.5) * w * 0.6, 60 + Math.random() * 70]);
+      }
+    }
+    this.scene.add(this.clouds.mesh);
+  }
+
+  _water() {
+    const T = this.T, sw = ZONES.swamp;
+    this.waterMat = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+        time: { value: 0 }, deep: { value: new THREE.Color(T.waterDeep) }, shallow: { value: new THREE.Color(T.waterShallow) },
+        swampCol: { value: new THREE.Color(T.swampWater) }, swamp: { value: new THREE.Vector3(sw.x, sw.z, sw.r) },
+        sunDir: { value: this.sunDir }, skyCol: { value: new THREE.Color(T.skyHorizon) }, frozen: { value: T.frozen ? 1 : 0 },
+      }]),
+      vertexShader: `
+        varying vec3 vW;
+        #include <fog_pars_vertex>
+        void main(){
+          vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
+          vec4 mvPosition = viewMatrix * w;
+          gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
+        }`,
+      fragmentShader: `
+        uniform float time, frozen; uniform vec3 deep, shallow, swampCol, swamp, sunDir, skyCol; varying vec3 vW;
+        ${NOISE_GLSL}
+        #include <fog_pars_fragment>
+        void main(){
+          vec2 p = vW.xz;
+          float sw = 1.0 - smoothstep(swamp.z * 0.5, swamp.z * 0.9, length(p - swamp.xy));
+          vec3 base = mix(mix(deep, shallow, 0.35 + 0.3 * vn(p * 0.02)), swampCol, sw);
+          vec3 V = normalize(cameraPosition - vW);
+          float t = time * (1.0 - frozen);
+          vec2 g = vec2(vn(p * 0.25 + t * 0.6) - vn(p * 0.25 + vec2(3.1) - t * 0.5), vn(p * 0.31 + vec2(7.0) - t * 0.4) - vn(p * 0.31 + vec2(1.7) + t * 0.55));
+          vec3 N = normalize(vec3(g.x * 0.35, 1.0, g.y * 0.35));
+          float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+          vec3 R = reflect(-V, N);
+          float spec = pow(max(dot(R, sunDir), 0.0), 120.0) * 2.5;
+          vec3 col = mix(base, skyCol, fres * 0.6) + vec3(spec);
+          float alpha = mix(0.82, 0.95, fres);
+          if (frozen > 0.5) { float cr = smoothstep(0.48, 0.5, vn(p * 0.15)) * (1.0 - smoothstep(0.5, 0.52, vn(p * 0.15))); col = mix(base, vec3(1.0), 0.25 + fres * 0.4) - cr * 0.15 + spec * 0.3; alpha = 1.0; }
+          gl_FragColor = vec4(col, alpha);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          #include <fog_fragment>
+        }`,
+      transparent: !T.frozen, fog: true, depthWrite: !!T.frozen,
+    });
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000, 1, 1), this.waterMat);
+    water.rotation.x = -Math.PI / 2; water.position.y = T.frozen ? 0.02 : -0.05;
+    water.receiveShadow = false;
+    this.scene.add(water);
+    this.water = water;
+  }
+
+  // 풀: 플레이어 주변에서 계속 돌려쓰는 풀밭 (지형 높이를 그림으로 만들어서 읽음)
+  _grass() {
+    const HS = 900, N = this.mobile ? 512 : 900;
+    const data = new Uint16Array(N * N * 4), toH = THREE.DataUtils.toHalfFloat;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const x = -HS + (i + 0.5) / N * HS * 2, z = -HS + (j + 0.5) / N * HS * 2;
+      const h = terrainHeight(x, z);
+      const w = zoneWeights(x, z);
+      let dens = 1, tint = 0;
+      if (h < 0.5) dens = 0;
+      dens *= 1 - Math.max(0, Math.min(1, (w[0] - 0.15) * 3));
+      if (w[1] > 0.4) { tint = 2; dens *= 0.6; }
+      if (w[2] > 0.4) { tint = 1; dens *= 0.55; }
+      const rd = roadDist(x, z);
+      if (rd < ROAD.width + 2) dens = 0; else if (rd < ROAD.width + 5) dens *= (rd - ROAD.width - 2) / 3;
+      if (Math.hypot(x, z) < 31) dens = 0;
+      for (const k in SITES) { const F = SITES[k]; if (Math.hypot(x - F.x, z - F.z) < F.r * 0.8) dens = 0; }
+      const k = (j * N + i) * 4;
+      data[k] = toH(h); data[k + 1] = toH(dens); data[k + 2] = toH(tint); data[k + 3] = toH(1);
+    }
+    // 가파른 곳(절벽)에는 풀이 없게
+    const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.HalfFloatType);
+    tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter; tex.needsUpdate = true;
+
+    const count = this.mobile ? 14000 : 60000, tile = this.mobile ? 56 : 84;
+    const base = new THREE.InstancedBufferGeometry();
+    // 날 하나: 아래 넓고 위로 뾰족
+    const pos = [-0.07, 0, 0, 0.07, 0, 0, -0.055, 0.35, 0, 0.055, 0.35, 0, -0.03, 0.7, 0, 0.03, 0.7, 0, 0, 1, 0];
+    base.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    base.setIndex([0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5, 4, 5, 6]);
+    const off = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) { off[i * 3] = Math.random() * tile; off[i * 3 + 1] = Math.random() * tile; off[i * 3 + 2] = Math.random(); }
+    base.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 3));
+    base.instanceCount = count;
+    const T = this.T;
+    this.grassMat = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
+        hm: { value: null }, hs: { value: HS }, tile: { value: tile }, center: { value: new THREE.Vector2() }, player: { value: new THREE.Vector3() }, time: { value: 0 },
+        cA: { value: new THREE.Color(T.grassB).multiplyScalar(0.75) }, cB: { value: new THREE.Color(T.grassA).lerp(new THREE.Color(0xeaff9a), 0.25) },
+        dryA: { value: new THREE.Color(0x9a8a3a) }, dryB: { value: new THREE.Color(0xe8d27a) },
+        purA: { value: new THREE.Color(0x3a4a3a) }, purB: { value: new THREE.Color(0x9a7ac8) },
+        sunDir: { value: this.sunDir },
+      }]),
+      vertexShader: `
+        uniform sampler2D hm; uniform float hs, tile, time; uniform vec2 center; uniform vec3 player;
+        attribute vec3 aOff; varying float vY; varying vec3 vTint; varying float vFlower; varying float vRand;
+        #include <fog_pars_vertex>
+        void main(){
+          vec2 rel = mod(aOff.xy - center + tile * 0.5, tile) - tile * 0.5;
+          vec2 wp = center + rel;
+          vec4 h = texture2D(hm, (wp + hs) / (2.0 * hs));
+          float r = aOff.z;
+          float keep = step(r, h.g);
+          float fade = 1.0 - smoothstep(tile * 0.32, tile * 0.5, length(rel));
+          float flower = step(0.975, fract(r * 91.7)) * step(h.b, 0.5);
+          float height = (0.45 + fract(r * 13.7) * 0.7) * keep * fade * (1.0 + flower * 0.3);
+          float ang = r * 40.0;
+          vec2 dir = vec2(cos(ang), sin(ang));
+          float y = position.y;
+          vec3 p = vec3(dir * position.x, 0.0).xzy;
+          p.y = y * height;
+          // 바람 + 플레이어가 지나가면 눕기
+          float wind = sin(time * 1.8 + wp.x * 0.12 + wp.y * 0.09) * 0.22 + sin(time * 3.1 + wp.x * 0.5) * 0.06;
+          vec2 away = wp - player.xz; float pd = length(away);
+          vec2 push = pd > 0.01 ? away / pd * (1.0 - smoothstep(0.4, 1.8, pd)) * step(abs(player.y - h.r), 2.0) : vec2(0.0);
+          vec2 bend = (vec2(wind, wind * 0.4) + push * 1.1) * y * y * height;
+          vec3 world = vec3(wp.x + p.x + bend.x, h.r + p.y - dot(push, push) * y * 0.3, wp.y + p.z + bend.y);
+          vY = y; vRand = r; vFlower = flower;
+          vTint = h.bbb;
+          vec4 mvPosition = viewMatrix * vec4(world, 1.0);
+          gl_Position = projectionMatrix * mvPosition;
+          #include <fog_vertex>
+        }`,
+      fragmentShader: `
+        uniform vec3 cA, cB, dryA, dryB, purA, purB; varying float vY; varying vec3 vTint; varying float vFlower; varying float vRand;
+        #include <fog_pars_fragment>
+        void main(){
+          float t = vTint.x;
+          vec3 a = cA, b = cB;
+          if (t > 1.5) { a = purA; b = purB; } else if (t > 0.5) { a = dryA; b = dryB; }
+          vec3 col = mix(a, b, vY) * (0.85 + fract(vRand * 7.3) * 0.3);
+          if (vFlower > 0.5 && vY > 0.8) col = fract(vRand * 3.1) > 0.5 ? vec3(1.0, 0.95, 0.4) : vec3(1.0, 0.55, 0.8);
+          gl_FragColor = vec4(col, 1.0);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+          #include <fog_fragment>
+        }`,
+      fog: true, side: THREE.DoubleSide,
+    });
+    this.grassMat.uniforms.hm.value = tex;
+    this.grass = new THREE.Mesh(base, this.grassMat);
+    this.grass.frustumCulled = false;
+    this.scene.add(this.grass);
+  }
+
+  _smoke() {
+    const N = this.mobile ? 120 : 260;
+    const tex = cloudTexture();
+    this.smoke = new Billboards(N, tex, { fog: true, shade: false });
+    this.smokeParts = [];
+    for (let i = 0; i < N; i++) this.smokeParts.push({ alive: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1, size: 1, dark: true });
+    this.scene.add(this.smoke.mesh);
+    this.smokeAcc = new Map();
+  }
+
+  update(dt, time, focus) {
+    // 해와 그림자가 플레이어를 따라감
+    this.sun.position.copy(focus).addScaledVector(this.sunDir, 250);
+    this.sun.target.position.copy(focus);
+    this.sky.position.copy(this.camera.position);
+    this.skyMat.uniforms.time.value = time;
+    this.waterMat.uniforms.time.value = time;
+    // 구름
+    const drift = time * 3;
+    this.cloudBase.forEach((c, i) => {
+      let x = c[0] + drift; x = ((x + 2200) % 4400 + 4400) % 4400 - 2200;
+      this.clouds.set(i, x, c[1], c[2], c[3], 1, 1, 1, 0.9);
+    });
+    this.clouds.flush();
+    if (this.grass) {
+      this.grassMat.uniforms.time.value = time;
+      this.grassMat.uniforms.center.value.set(focus.x, focus.z);
+      this.grassMat.uniforms.player.value.copy(focus);
+    }
+    // 연기 (가까운 굴뚝만)
+    for (const e of this.world.smokeEmitters) {
+      if (!e.rate) continue;
+      const d = e.pos.distanceTo(focus);
+      if (d > 700) continue;
+      let acc = (this.smokeAcc.get(e) || 0) + dt * e.rate * (d < 300 ? 1 : 0.4);
+      while (acc >= 1) {
+        acc -= 1;
+        const p = this.smokeParts.find((q) => !q.alive);
+        if (!p) break;
+        p.alive = true; p.max = p.life = 5 + Math.random() * 3; p.size = 3 + Math.random() * 3;
+        p.pos.copy(e.pos); p.vel.set((Math.random() - 0.5) * 1.5 + 2, 4 + Math.random() * 2, (Math.random() - 0.5) * 1.5); p.dark = e.dark;
+      }
+      this.smokeAcc.set(e, acc);
+    }
+    this.smokeParts.forEach((p, i) => {
+      if (!p.alive) { this.smoke.set(i, 0, -999, 0, 0, 0, 0, 0, 0); return; }
+      p.life -= dt; if (p.life <= 0) { p.alive = false; return; }
+      p.pos.addScaledVector(p.vel, dt); p.vel.y *= 0.995;
+      const k = 1 - p.life / p.max;
+      const c = p.dark ? 0.32 + k * 0.3 : 0.9;
+      this.smoke.set(i, p.pos.x, p.pos.y, p.pos.z, p.size * (1 + k * 3), c, c, c * 1.03, (1 - k) * 0.55);
+    });
+    this.smoke.flush();
+  }
+
+  render() {
+    if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
+  }
+}
