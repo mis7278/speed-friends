@@ -109,6 +109,19 @@
   .modes button { font-family: inherit; font-weight: 900; font-size: 16px; color: #fff; padding: 8px 16px; border-radius: 14px; border: 3px solid rgba(255,255,255,.5); background: rgba(0,0,0,.4); cursor: pointer; }
   .modes button small { font-size: 11px; font-weight: 700; }
   .modes button.sel { border-color: #ffe14d; background: rgba(255,170,30,.45); }
+
+  @media (max-height: 500px) {
+    #start { gap: 6px; padding: 8px; justify-content: flex-start; }
+    #title { font-size: 26px !important; text-shadow: 0 3px 0 #0b2a66 !important; }
+    .cards { gap: 6px; flex-wrap: nowrap; }
+    .card { width: 118px; padding: 5px 6px; border-width: 2px; }
+    .card-dot { width: 22px; height: 22px; margin-bottom: 2px; border-width: 2px; }
+    .card-name { font-size: 15px; } .card-type { font-size: 10px; margin: 0; }
+    .card-desc { display: none; }
+    #start-btn { font-size: 20px; padding: 6px 34px; border-width: 3px; }
+    .modes button { font-size: 12px; padding: 4px 10px; }
+    .help { display: none; }
+  }
   /* 시네마틱 */
   .cine { position: fixed; inset: 0; z-index: 15; display: none; }
   .cine.on { display: block; }
