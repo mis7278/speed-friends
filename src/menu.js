@@ -41,6 +41,7 @@ export class PauseMenu {
       ['▶ 계속하기', () => this.close(), 'big'],
       ['💾 저장하기', () => this.slots('save')],
       ['📂 불러오기', () => this.slots('load')],
+      ['👥 같이 하기', () => this.opts.onCoop?.()],
       ['🏠 처음 화면으로', () => this.confirm('처음 화면으로 갈까요?<br><small>저장하지 않은 진행은 사라져요</small>', () => this.opts.onQuit())],
     ]);
   }

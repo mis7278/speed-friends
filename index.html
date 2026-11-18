@@ -105,6 +105,20 @@
   .flash { position: absolute; inset: 0; opacity: 0; }
   .underwater { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; background: radial-gradient(ellipse at 50% 30%, rgba(60,170,230,.28), rgba(10,60,120,.62)); }
   .underwater.on { opacity: 1; }
+  #coop-btn { font-family: inherit; font-size: 17px; font-weight: 800; color: #fff; background: rgba(40,120,255,.55); border: 2px solid #fff; border-radius: 14px; padding: 8px 18px; cursor: pointer; }
+  #coop-panel { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.55); z-index: 60; }
+  #coop-panel.on { display: flex; }
+  .coop-box { background: linear-gradient(180deg, #2a5fd0, #1b3a8a); border: 3px solid #fff; border-radius: 20px; padding: 18px 20px; width: min(420px, 92vw); color: #fff; display: flex; flex-direction: column; gap: 10px; text-align: center; font-weight: 800; }
+  .coop-title { font-size: 22px; } .coop-title small { font-size: 12px; opacity: .8; }
+  .coop-box button { font-family: inherit; font-weight: 900; font-size: 17px; color: #fff; background: rgba(255,255,255,.16); border: 2px solid rgba(255,255,255,.7); border-radius: 12px; padding: 9px 14px; cursor: pointer; }
+  .coop-big { background: #ffb02e !important; font-size: 20px !important; }
+  .coop-or { font-size: 13px; opacity: .85; }
+  .coop-row { display: flex; gap: 8px; justify-content: center; }
+  #coop-code { width: 120px; font-family: inherit; font-size: 24px; font-weight: 900; text-align: center; letter-spacing: 6px; text-transform: uppercase; border-radius: 12px; border: 2px solid #fff; padding: 6px; }
+  #coop-status { min-height: 22px; font-size: 16px; color: #ffe14d; }
+  #coop-list { font-size: 14px; opacity: .9; }
+  #coop-badge { position: fixed; left: 50%; top: calc(86px + env(safe-area-inset-top)); transform: translateX(-50%); background: rgba(30,80,200,.7); color: #fff; font-weight: 900; font-size: 13px; padding: 3px 12px; border-radius: 12px; z-index: 6; display: none; pointer-events: none; }
+  #coop-badge.on { display: block; }
 
   /* 캐릭터 선택 */
   .cards { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
@@ -239,6 +253,7 @@
   <div class="cards" id="cards"></div>
   <button id="start-btn">시작!</button>
   <button id="continue-btn" style="display:none">📂 이어하기</button>
+  <button id="coop-btn">👥 같이 하기</button>
   <div id="load-list" style="display:none"></div>
   <button id="install-btn" style="display:none">📲 앱으로 설치하기</button>
   <div id="ios-hint" style="display:none">📲 앱처럼 설치하기: 아래(아이패드는 위) <b>공유 버튼 <span class="ios-share">⬆</span></b> → <b>"홈 화면에 추가"</b></div>
@@ -255,6 +270,19 @@
     <b>변신</b> 씨앗 3개 + 링 50개 → 점프를 1.5초 꾹!
   </div>
 </div>
+<div id="coop-panel">
+  <div class="coop-box">
+    <div class="coop-title">👥 같이 하기 <small>(최대 4명)</small></div>
+    <button id="coop-host" class="coop-big">🏠 방 만들기</button>
+    <div class="coop-or">또는 친구의 방 번호 넣기</div>
+    <div class="coop-row"><input id="coop-code" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters" spellcheck="false"><button id="coop-join">🚪 들어가기</button></div>
+    <div id="coop-status"></div>
+    <div id="coop-list"></div>
+    <div class="coop-row"><button id="coop-leave" style="display:none">나가기</button><button id="coop-close">닫기</button></div>
+  </div>
+</div>
+<div id="coop-badge"></div>
+<script src="./vendor/peerjs.min.js"></script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>

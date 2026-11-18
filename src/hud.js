@@ -227,6 +227,7 @@ export class HUD {
     for (const c of world.checkpoints) { const [px, pz] = S(c.pos.x, c.pos.z); ctx.fillStyle = c.active ? '#ffe14d' : '#9a8a40'; ctx.fillRect(px - 3, pz - 3, 6, 6); }
     ctx.fillStyle = '#ff3030';
     for (const e of enemies.list) { if (!e.alive || e.asleep) continue; const [px, pz] = S(e.pos.x, e.pos.z); ctx.beginPath(); ctx.arc(px, pz, 2.2, 0, 7); ctx.fill(); }
+    if (this.friends) { ctx.save(); ctx.fillStyle = '#7df0ff'; ctx.strokeStyle = '#003'; ctx.lineWidth = 1.5; for (const r of this.friends.values()) { if (!r.view.root.visible) continue; const [px, pz] = S(r.pos.x, r.pos.z); ctx.beginPath(); ctx.arc(px, pz, 4, 0, 7); ctx.fill(); ctx.stroke(); } ctx.restore(); }
     const pin = (x, z, color, r) => {
       let [px, pz] = S(x, z);
       const dx = px - W / 2, dz = pz - H / 2, l = Math.hypot(dx, dz), max = W / 2 - 10;

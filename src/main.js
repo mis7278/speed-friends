@@ -21,6 +21,7 @@ import { loadProgress, recoverCrystal, BIG_CRYSTALS } from './progress.js';
 import { readSave, hasAnySave } from './save.js';
 import { PauseMenu, showLoadList } from './menu.js';
 import { Guardians } from './guardian.js';
+import { Net } from './net.js';
 
 function showError(msg) {
   let box = document.getElementById('err');
@@ -124,6 +125,27 @@ function boot() {
   }
   // 한 지점 주위를 빙 돌며 보여주는 장면
   game.playCine = playCine;
+  game.stageIdx = stageIdx;
+  // ---- 같이 하기 ----
+  const net = new Net(game); game.net = net; game.hud.friends = net.remotes;
+  const coopPanel = document.getElementById('coop-panel'), coopStatus = document.getElementById('coop-status'), coopList = document.getElementById('coop-list');
+  const coopBadge = document.getElementById('coop-badge'), coopLeave = document.getElementById('coop-leave'), coopCode = document.getElementById('coop-code');
+  net.onChange = () => {
+    coopStatus.textContent = net.status;
+    coopLeave.style.display = net.code ? '' : 'none';
+    coopList.textContent = net.code ? `지금 ${net.count}명` + (net.remotes.size ? ' — ' + [...net.remotes.values()].map((r) => `P${r.num} ${NAMES.characters[r.kind]}`).join(', ') : '') : '';
+    coopBadge.classList.toggle('on', !!net.code);
+    coopBadge.textContent = net.code ? `👥 방 ${net.code} · ${net.count}명` : '';
+  };
+  const openCoop = () => { coopPanel.classList.add('on'); net.onChange(); };
+  document.getElementById('coop-btn').addEventListener('click', openCoop);
+  document.getElementById('coop-close').addEventListener('click', () => coopPanel.classList.remove('on'));
+  document.getElementById('coop-host').addEventListener('click', () => net.createRoom());
+  document.getElementById('coop-join').addEventListener('click', () => net.joinRoom(coopCode.value));
+  coopCode.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') net.joinRoom(coopCode.value); });
+  coopLeave.addEventListener('click', () => net.leave());
+  game.openCoop = openCoop;
+  net.resume();
   const orbit = (c, dist, h, a0, a1, dur, text, who, extra = {}) => ({
     from: { pos: V(c.x + Math.sin(a0) * dist, c.y + h, c.z + Math.cos(a0) * dist), look: c.clone().add(V(0, 3, 0)) },
     to: { pos: V(c.x + Math.sin(a1) * dist, c.y + h * 0.85, c.z + Math.cos(a1) * dist), look: c.clone().add(V(0, 3, 0)) },
@@ -459,6 +481,7 @@ function boot() {
       goNextStage();
     }
     exploreTick(dt);
+    net.update(dt);
     // 장벽을 몰래 넘어가면 기어 군단이 막음
     if (W.barrierUp && pl.alive && Math.hypot(pl.pos.x, pl.pos.z) > CFG.world.barrierR + 8) guardians.trigger();
     guardians.update(dt);
@@ -588,7 +611,8 @@ function boot() {
     onPause: (v) => { paused = v; if (!v) clockReset = true; },
     getSaveData,
     onLoad: (slot) => { const d = readSave(slot); if (d) location.href = `?stage=${d.stage}&load=${slot}`; },
-    onQuit: () => { location.href = location.pathname; },
+    onQuit: () => { net.leave(); location.href = location.pathname; },
+    onCoop: () => openCoop(),
   });
   game.getSaveData = getSaveData;
 
