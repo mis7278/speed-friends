@@ -39,14 +39,16 @@ export const CFG = {
   ],
   gearUpTime: 0.35,        // 그 단계 최고 속도로 이만큼(초) 달리면 다음 단계로
   characters: {           // 캐릭터별 속도·점프 배율
-    speed: { speed: 1.0, jump: 1.0 },
-    flyer: { speed: 0.9, jump: 1.05 },
-    power: { speed: 0.85, jump: 0.95 },
-    blink: { speed: 0.92, jump: 1.0 },
+    // gearCap: 1단·2단·3단 최고속도 배율 (스피드형 외에는 1·2단이 살짝 더 빠르고 가속이 빠름 → 3단 최고속도는 스피드형이 제일)
+    speed: { speed: 1.0, jump: 1.0, gearCap: [1, 1, 1], accel: 1, gearUp: 1 },
+    flyer: { speed: 0.95, jump: 1.05, gearCap: [1.12, 1.08, 0.95], accel: 1.25, gearUp: 0.7 },
+    power: { speed: 0.93, jump: 0.95, gearCap: [1.1, 1.06, 0.93], accel: 1.22, gearUp: 0.7 },
+    blink: { speed: 0.96, jump: 1.0, gearCap: [1.12, 1.08, 0.96], accel: 1.25, gearUp: 0.7 },
   },
-  flyer: { flapVel: 10, gaugeMax: 100, flapCost: 10, drainPerSec: 9, gravityMul: 0.5, tornadoCooldown: 3, tornadoSpeed: 34 },
+  // 비행형: 점프 연타할수록 헬리콥터처럼 더 빠르게 올라감, 안 누르면 천천히 내려오며 게이지 회복, 한 번에 최대 maxTime초
+  flyer: { flapAdd: 6.5, maxRise: 26, gaugeMax: 100, flapCost: 4, regenPerSec: 14, maxTime: 20, fallSpeed: 3.2, gravityMul: 0.35, tornadoCooldown: 3, tornadoSpeed: 34 },
   power: { glideFall: 3.5, glideSpeed: 16, punchRange: 3.4 },
-  blink: { range: 30, energyRadius: 5.5, ultCooldown: 10, ultRange: 80, ultRingCost: 0.1 },
+  blink: { range: 30, energyRadius: 5.5, returnInvuln: 1.0, ultCooldown: 10, ultRange: 80, ultRingCost: 0.1 },
   rings: {
     respawn: 30,          // 먹은 링이 다시 생기는 시간(초)
     scatterMax: 30,       // 맞았을 때 흩어지는 링 최대 표시 개수
@@ -84,10 +86,10 @@ export const CFG = {
     drainPerSec: 1,       // 변신 중 초당 줄어드는 링
     speedMul: 2.5,        // 변신 중 모든 속도 배율
     jumpMul: 1.3,         // 변신 중 점프 배율
-    flightLift: 0.5,      // 스피드형 슈퍼 비행: 달리던 속도의 몇 배로 솟아오르는지
-    flightMaxLift: 24,
-    flightGravity: 0.22,  // 비행 중 중력 (작을수록 천천히 내려옴)
-    flightMinFall: -5,    // 가장 빨리 떨어지는 속도
+    floatHop: 9,          // 스피드형 슈퍼 2단 점프: 살짝 더 뛰어오른 뒤
+    floatGravity: 0.25,   //   천천히 내려옴 (중력 비율)
+    floatMinFall: -4.5,   //   가장 빨리 떨어지는 속도
+    slamRadiusMul: 4,     // 슈퍼 내려찍기 범위 배율 (보통의 4배)
   },
   loop: {
     radius: 14,           // 루프 크기 (반지름)
@@ -96,11 +98,13 @@ export const CFG = {
     push: 5,              // 루프 안에서 앞 방향키를 누르고 있을 때 가속
     sideAccel: 16,        // 루프 안에서 옆으로 움직이는 힘
   },
-  water: { runSpeed: 20, swimDepth: -1.0, slow: 0.55 },
+  water: { runSpeed: 20, swimDepth: -1.0, swimAt: 1.5, slow: 0.55,
+    drag: 2.2, dragQuad: 0.03, swimAccel: 20, stroke: 9, burst: 26, buoyancy: 12, floatY: -1.0, groundDragQuad: 0.03 }, // 물: 깊이 swimAt(m) 넘으면 헤엄. 강한 힘은 잠깐 빠르지만 저항(drag)으로 금방 느려짐
   boostPad: { speed: 40 },
   cannon: { speed: 85, flightTime: 2.6 }, // 하늘 섬 대포: 발사 속도, 멀리 날아가는 시간(초)
   spring: { power: 27 },
   world: { barrierR: 1680, exitR: 2150, terrainHalf: 2600 },
+  guardian: { count: 6, speed: 41, hardSpeed: 50, startDist: 95, laserEvery: 2.6, laserWarn: 0.8, laserRadius: 4.5, stompRange: 26, damage: 3 }, // 장벽 너머 기어 군단: 아주 빠르고 강함 (슈퍼면 겨우 도망칠 수 있음)
   camera: {
     distance: 9.5,
     minPitch: -0.25,
@@ -110,5 +114,6 @@ export const CFG = {
     mouseSensitivity: 0.005,
     touchSensitivity: 0.008,
     autoFollowDelay: 1.2, // 직접 돌린 뒤 자동으로 뒤를 따라가기까지(초)
+    zoomMin: 0.3, zoomMax: 2.8, zoomStep: 1.15, // 마우스 휠·두 손가락: 거리 배율 (zoomMin보다 가까우면 1인칭)
   },
 };

@@ -24,6 +24,7 @@ export class HUD {
     this.bigCry = $('div', 'big-cry', tl, '');
     this.gauge = $('div', 'gauge', tl, '<div class="gauge-label">비행</div><div class="gauge-bar"><div class="gauge-fill"></div></div>');
     this.gaugeFill = this.gauge.querySelector('.gauge-fill');
+    this.gaugeLabel = this.gauge.querySelector('.gauge-label');
 
     // 왼쪽 아래: 속도 단계
     this.speedo = $('div', 'speedo', root);
@@ -60,6 +61,7 @@ export class HUD {
     this.slotCrystal.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressTouch('item1'); setTimeout(() => input.releaseTouch('item1'), 50); });
     this.slotHeart.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressTouch('item2'); setTimeout(() => input.releaseTouch('item2'), 50); });
 
+    this.underEl = $('div', 'underwater', root); // 물 속 화면 (파랗게)
     this.flashEl = $('div', 'flash', root);
     this.fade = $('div', 'fade', root);
     if (input.isTouch) this._touchControls();
@@ -82,6 +84,7 @@ export class HUD {
     const joyBase = $('div', 'joy-base', layer);
     const joyKnob = $('div', 'joy-knob', joyBase);
     let joyId = null, joyCx = 0, joyCy = 0, camId = null, camX = 0, camY = 0;
+    let pinchId = null, pinX = 0, pinY = 0, pinD = 0; // 두 손가락 벌리기/오므리기 = 확대·축소
     const R = 55;
     layer.addEventListener('pointerdown', (e) => {
       if (e.clientX < window.innerWidth * 0.45 && joyId === null) {
@@ -90,6 +93,7 @@ export class HUD {
         joyBase.classList.add('on');
         input.touchMove.active = true; input.touchMove.x = 0; input.touchMove.y = 0;
       } else if (camId === null) { camId = e.pointerId; camX = e.clientX; camY = e.clientY; }
+      else if (pinchId === null) { pinchId = e.pointerId; pinX = e.clientX; pinY = e.clientY; pinD = Math.hypot(pinX - camX, pinY - camY); }
       layer.setPointerCapture(e.pointerId);
     });
     layer.addEventListener('pointermove', (e) => {
@@ -99,9 +103,15 @@ export class HUD {
         if (l > R) { dx = dx / l * R; dy = dy / l * R; }
         joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
         input.touchMove.x = dx / R; input.touchMove.y = -dy / R;
-      } else if (e.pointerId === camId) {
-        input.touchCamera(e.clientX - camX, e.clientY - camY);
-        camX = e.clientX; camY = e.clientY;
+      } else if (e.pointerId === camId || e.pointerId === pinchId) {
+        if (pinchId !== null) { // 두 손가락: 확대·축소만
+          if (e.pointerId === camId) { camX = e.clientX; camY = e.clientY; } else { pinX = e.clientX; pinY = e.clientY; }
+          const d = Math.hypot(pinX - camX, pinY - camY);
+          if (pinD > 10 && d > 10) { input.zoomSteps += Math.log(pinD / d) / Math.log(1.15) * 1.3; pinD = d; }
+        } else {
+          input.touchCamera(e.clientX - camX, e.clientY - camY);
+          camX = e.clientX; camY = e.clientY;
+        }
       }
     });
     const end = (e) => {
@@ -109,7 +119,8 @@ export class HUD {
         joyId = null; input.touchMove.active = false; input.touchMove.x = 0; input.touchMove.y = 0;
         joyKnob.style.transform = ''; joyBase.classList.remove('on');
       }
-      if (e.pointerId === camId) camId = null;
+      if (e.pointerId === camId) { camId = pinchId; camX = pinX; camY = pinY; pinchId = null; }
+      else if (e.pointerId === pinchId) pinchId = null;
     };
     layer.addEventListener('pointerup', end);
     layer.addEventListener('pointercancel', end);
@@ -160,9 +171,16 @@ export class HUD {
     if (p.kind === 'blink' && p.superOn) st += p.ultCD > 0 ? ` 🌑 ${Math.ceil(p.ultCD)}초` : ' 🌑 점프 꾹: 블랙홀!';
     if (p.kind === 'flyer' && p.superOn && p.tornadoCD > 0) st += ` 🌪 ${Math.ceil(p.tornadoCD)}초`;
     this.superText.textContent = st;
-    const showGauge = p.kind === 'flyer' && !p.superOn && p.flyGauge < CFG.flyer.gaugeMax;
+    const showGauge = p.kind === 'flyer' && !p.superOn && (p.flying || p.flyGauge < CFG.flyer.gaugeMax);
     this.gauge.classList.toggle('on', showGauge);
-    if (showGauge) this.gaugeFill.style.width = (p.flyGauge / CFG.flyer.gaugeMax * 100) + '%';
+    if (showGauge) {
+      this.gaugeFill.style.width = (p.flyGauge / CFG.flyer.gaugeMax * 100) + '%';
+      const left = p.flying ? Math.max(0, Math.ceil(CFG.flyer.maxTime - (p.flyTime || 0))) : null;
+      const label = left === null ? '비행' : left > 0 ? `비행 ${left}초` : '비행 끝';
+      if (this.gaugeLabel.textContent !== label) this.gaugeLabel.textContent = label;
+    }
+    const under = !!this.underwaterOn;
+    if (this.underEl.classList.contains('on') !== under) this.underEl.classList.toggle('on', under);
     // 속도 단계
     this.gearCells.forEach((c, i) => { c.classList.toggle('lit', i < p.gear && p.s > 0.5); c.classList.toggle('max', p.gear === 3 && i === 2 && p.s > 0.5); });
     const sp = p.state === 'air' ? Math.hypot(p.vel.x, p.vel.z) : Math.abs(p.s);

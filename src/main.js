@@ -123,6 +123,7 @@ function boot() {
     });
   }
   // 한 지점 주위를 빙 돌며 보여주는 장면
+  game.playCine = playCine;
   const orbit = (c, dist, h, a0, a1, dur, text, who, extra = {}) => ({
     from: { pos: V(c.x + Math.sin(a0) * dist, c.y + h, c.z + Math.cos(a0) * dist), look: c.clone().add(V(0, 3, 0)) },
     to: { pos: V(c.x + Math.sin(a1) * dist, c.y + h * 0.85, c.z + Math.cos(a1) * dist), look: c.clone().add(V(0, 3, 0)) },
@@ -411,6 +412,7 @@ function boot() {
       cine.update(dt);
       W.update(dt, game.time);
       if (game.boss && game.boss.state === 'enter') game.boss.update(dt, game.time);
+      guardians.update(dt, true);
       sci.update(dt, game.time);
       holo.update(dt, game.time);
       game.fx.update(dt);
@@ -452,7 +454,11 @@ function boot() {
       else { const t = questText(Q); if (game.hud.questText.textContent !== t) game.hud.questText.textContent = t; }
     }
     if (game.boss && game.boss.alive && game.boss.state !== 'enter') game.hud.setBoss(`🤖 ${game.boss.name}`, game.boss.hp / game.boss.maxHp);
-    if (!W.barrierUp && stageIdx + 1 < STAGES.length && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) goNextStage();
+    if (pl.alive && stageIdx + 1 < STAGES.length && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) {
+      if (W.barrierUp && !leaving) game.hud.toast('🏃 기어 군단을 따돌렸다! 다음 대지로!', 'gold');
+      goNextStage();
+    }
+    exploreTick(dt);
     // 장벽을 몰래 넘어가면 기어 군단이 막음
     if (W.barrierUp && pl.alive && Math.hypot(pl.pos.x, pl.pos.z) > CFG.world.barrierR + 8) guardians.trigger();
     guardians.update(dt);
@@ -517,6 +523,37 @@ function boot() {
   else document.getElementById('help-touch').style.display = 'none';
 
   // ---- 저장하기 / 불러오기 ----
+  // ---- 탐험: 새로운 장소 발견 · 보물 상자 · 폭포 물보라 · 물 속 화면 ----
+  const chestTotal = W.chests.length, placeTotal = W.discoveries.length;
+  function openChest(ch) {
+    ch.opened = true;
+    const n = 40;
+    pl.collectRing(n);
+    if (Math.random() < 0.35) game.pickups.spawnHeart(ch.pos.clone().add(V(0, 2, 0)));
+    game.fx.burst(ch.pos.clone().add(V(0, 1.2, 0)), 0xffd23a, 26, 8);
+    game.fx.shockwave(ch.pos, 4, 0xffd23a);
+    SFX.crystal();
+    const got = W.chests.filter((c) => c.opened).length;
+    game.hud.toast(`🎁 보물 상자! 링 +${n} (${got}/${chestTotal})`, 'gold');
+    const b = W.beacons.find((x) => x.name === ch.name); if (b) b.found = true;
+  }
+  function exploreTick(dt) {
+    if (!pl.alive) return;
+    for (const ch of W.chests) {
+      if (ch.opened || Math.abs(ch.pos.x - pl.pos.x) > 2.8 || Math.abs(ch.pos.z - pl.pos.z) > 2.8 || Math.abs(ch.pos.y - pl.pos.y) > 2.6) continue;
+      openChest(ch);
+    }
+    for (const d of W.discoveries) {
+      if (d.found || Math.hypot(d.pos.x - pl.pos.x, d.pos.z - pl.pos.z) > d.r) continue;
+      d.found = true;
+      const k = W.discoveries.filter((x) => x.found).length;
+      SFX.checkpoint();
+      game.hud.toast(`🗺️ 새로운 장소 발견! 「${d.name}」 (${k}/${placeTotal})`, 'gold');
+    }
+    for (const w of W.waterfalls) if (Math.random() < 0.35 && Math.abs(w.pos.x - pl.pos.x) < 160 && Math.abs(w.pos.z - pl.pos.z) < 160) game.fx.burst(w.pos.clone().add(V(Math.random() * 3, 0.5, (Math.random() - 0.5) * 9)), 0xf4fbff, 2, 3);
+    game.hud.underwaterOn = camera.position.y < -0.08 && W.isWater(camera.position.x, camera.position.z);
+  }
+
   function getSaveData() {
     const cps = W.checkpoints.map((c, i) => (c.active ? i : -1)).filter((i) => i >= 0);
     const near = W.nearestCheckpoint(pl.pos);
@@ -525,6 +562,8 @@ function boot() {
       rings: pl.rings, health: Math.max(1, Math.round(pl.health)), hearts: pl.storedHearts,
       seed: missionSeed, missionsDone: game.missions.list.map((m) => m.done), stats: pl.stats, kills,
       checkpoints: cps, cp: W.checkpoints.indexOf(near), secret: pl.secretFound,
+      chests: W.chests.map((c, i) => (c.opened ? i : -1)).filter((i) => i >= 0),
+      places: W.discoveries.map((c, i) => (c.found ? i : -1)).filter((i) => i >= 0),
     };
   }
   function applySave(d) {
@@ -534,6 +573,8 @@ function boot() {
     (d.missionsDone || []).forEach((done, i) => { if (game.missions.list[i]) game.missions.list[i].done = done; });
     Object.assign(kills, d.kills || {});
     for (const i of d.checkpoints || []) if (W.checkpoints[i]) { W.activateCheckpoint(W.checkpoints[i]); W.checkpoints[i].flash = 0; }
+    for (const i of d.chests || []) { const c = W.chests[i]; if (c) { c.opened = true; c.lid.rotation.x = -1.9; const b = W.beacons.find((x) => x.name === c.name); if (b) b.found = true; } }
+    for (const i of d.places || []) if (W.discoveries[i]) W.discoveries[i].found = true;
     // 이미 지나간 퀘스트의 결과를 맵에 반영
     const dead = (tag) => { const c = core(tag); if (c) { c.alive = false; c.mesh.visible = false; c.shielded = false; } };
     if (d.quest >= 1) dead('base');

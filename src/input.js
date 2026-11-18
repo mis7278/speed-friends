@@ -27,6 +27,7 @@ export class Input {
     this.cam = { dx: 0, dy: 0 };       // 이번 프레임 카메라 회전량
     this.camKey = 0;                   // Q/E
     this.manualCamTime = 999;          // 마지막으로 직접 카메라를 돌린 뒤 경과 시간
+    this.zoomSteps = 0;                // 마우스 휠·두 손가락: + 멀리, - 가까이
     this.buttons = { a: makeButton(), b: makeButton(), c: makeButton(), item1: makeButton(), item2: makeButton() };
     this.keys = new Set();
     this.touchMove = { x: 0, y: 0, active: false };
@@ -82,6 +83,7 @@ export class Input {
       this.manualCamTime = 0;
     });
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.canvas.addEventListener('wheel', (e) => { e.preventDefault(); this.zoomSteps += Math.sign(e.deltaY) * Math.min(3, Math.max(1, Math.abs(e.deltaY) / 100)); }, { passive: false });
   }
 
   // 터치 화면 쪽에서 호출

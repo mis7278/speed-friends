@@ -207,14 +207,15 @@ export class Graphics {
           vec3 R = reflect(-V, N);
           float spec = pow(max(dot(R, sunDir), 0.0), 120.0) * 2.5;
           vec3 col = mix(base, skyCol, fres * 0.6) + vec3(spec);
-          float alpha = mix(0.82, 0.95, fres);
+          float alpha = mix(0.62, 0.93, fres);
+          if (!gl_FrontFacing) { col = mix(base, vec3(0.75, 0.92, 1.0), 0.35); alpha = 0.55; }
           if (frozen > 0.5) { float cr = smoothstep(0.48, 0.5, vn(p * 0.15)) * (1.0 - smoothstep(0.5, 0.52, vn(p * 0.15))); col = mix(base, vec3(1.0), 0.25 + fres * 0.4) - cr * 0.15 + spec * 0.3; alpha = 1.0; }
           gl_FragColor = vec4(col, alpha);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
         }`,
-      transparent: !T.frozen, fog: true, depthWrite: !!T.frozen,
+      transparent: !T.frozen, fog: true, depthWrite: !!T.frozen, side: THREE.DoubleSide,
     });
     const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000, 1, 1), this.waterMat);
     water.rotation.x = -Math.PI / 2; water.position.y = T.frozen ? 0.02 : -0.05;
