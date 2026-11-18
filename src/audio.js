@@ -3,7 +3,7 @@ let ctx = null;
 let master = null;
 
 export function initAudio() {
-  if (ctx) { if (ctx.state === 'suspended') ctx.resume(); return; }
+  if (ctx) { if (ctx.state !== 'running' && ctx.state !== 'closed') ctx.resume().catch(() => {}); return; }
   try {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     master = ctx.createGain();
@@ -12,8 +12,12 @@ export function initAudio() {
   } catch (e) { ctx = null; }
 }
 
+// 휴대폰에서 소리 장치가 아직 준비 안 됐으면(시간·샘플레이트가 0/NaN) 그냥 조용히 넘어감
+function audioReady() {
+  return ctx && ctx.state !== 'closed' && Number.isFinite(ctx.currentTime) && ctx.sampleRate > 0;
+}
 function tone(freq, dur, { type = 'sine', slide = null, vol = 0.5, delay = 0 } = {}) {
-  if (!ctx) return;
+  if (!audioReady() || !Number.isFinite(freq) || !(dur > 0)) return;
   const t = ctx.currentTime + delay;
   const o = ctx.createOscillator();
   const g = ctx.createGain();
@@ -27,9 +31,9 @@ function tone(freq, dur, { type = 'sine', slide = null, vol = 0.5, delay = 0 } =
 }
 
 function noise(dur, { vol = 0.4, freq = 1200, slide = null, q = 1 } = {}) {
-  if (!ctx) return;
+  if (!audioReady() || !(dur > 0)) return;
   const t = ctx.currentTime;
-  const len = Math.floor(ctx.sampleRate * dur);
+  const len = Math.max(1, Math.floor(ctx.sampleRate * dur));
   const buf = ctx.createBuffer(1, len, ctx.sampleRate);
   const d = buf.getChannelData(0);
   for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
@@ -190,12 +194,14 @@ export function initSound() {
 for (const key of Object.keys(SFX)) {
   const synth = SFX[key];
   SFX[key] = (...args) => {
-    const url = files.sfx[key];
-    const buf = url && buffers.get(url);
-    if (buf && !(buf instanceof Promise) && ctx) {
-      const rate = key === 'spinCharge' ? 0.8 + (args[0] || 1) * 0.06 : key === 'gearUp' ? 0.9 + (args[0] || 1) * 0.1 : 1;
-      playBuffer(buf, { vol: audioSettings.sfx * 2.2, rate });
-    } else synth(...args);
+    try { // 소리 오류가 게임을 멈추면 안 됨
+      const url = files.sfx[key];
+      const buf = url && buffers.get(url);
+      if (buf && !(buf instanceof Promise) && audioReady()) {
+        const rate = key === 'spinCharge' ? 0.8 + (args[0] || 1) * 0.06 : key === 'gearUp' ? 0.9 + (args[0] || 1) * 0.1 : 1;
+        playBuffer(buf, { vol: audioSettings.sfx * 2.2, rate });
+      } else synth(...args);
+    } catch (e) { /* 무시 */ }
   };
 }
 // 배경음악 (파일이 있을 때만), 부드럽게 바뀜
