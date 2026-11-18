@@ -9,6 +9,7 @@ export const KEYMAP = {
   right: ['KeyD', 'ArrowRight'],
   a: ['Space'],
   b: [],            // B는 마우스 왼쪽 클릭 (아래 _bindMouse)
+  c: ['KeyC', 'ShiftLeft', 'ShiftRight'], // C: 스핀 발사 / 달리다가 구르기
   item1: ['Digit1', 'Numpad1'],
   item2: ['Digit2', 'Numpad2'],
   camLeft: ['KeyQ'],
@@ -26,10 +27,10 @@ export class Input {
     this.cam = { dx: 0, dy: 0 };       // 이번 프레임 카메라 회전량
     this.camKey = 0;                   // Q/E
     this.manualCamTime = 999;          // 마지막으로 직접 카메라를 돌린 뒤 경과 시간
-    this.buttons = { a: makeButton(), b: makeButton(), item1: makeButton(), item2: makeButton() };
+    this.buttons = { a: makeButton(), b: makeButton(), c: makeButton(), item1: makeButton(), item2: makeButton() };
     this.keys = new Set();
     this.touchMove = { x: 0, y: 0, active: false };
-    this.padState = { a: false, b: false, item1: false, item2: false };
+    this.padState = { a: false, b: false, c: false, item1: false, item2: false };
     this.isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
     this._bindKeyboard();
     this._bindMouse();
@@ -107,7 +108,7 @@ export class Input {
   _pollGamepads() {
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     let mx = 0, my = 0, cx = 0, cy = 0;
-    const st = { a: false, b: false, item1: false, item2: false };
+    const st = { a: false, b: false, c: false, item1: false, item2: false };
     for (const p of pads) {
       if (!p || !p.connected) continue;
       const bt = (i) => !!(p.buttons[i] && p.buttons[i].pressed);
@@ -130,6 +131,7 @@ export class Input {
       if (Math.hypot(x, y) > 0.2) { mx = x; my = y; }
       if (bt(0)) st.a = true;
       if (bt(1)) st.b = true;
+      if (bt(2) || bt(3)) st.c = true;
       if (bt(4) || bt(6)) st.item1 = true;
       if (bt(5) || bt(7)) st.item2 = true;
     }

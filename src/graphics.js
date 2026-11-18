@@ -4,7 +4,7 @@ import { EffectComposer } from '../vendor/addons/postprocessing/EffectComposer.j
 import { RenderPass } from '../vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from '../vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
-import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES } from './world.js';
+import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES, snowAmount } from './world.js';
 
 const NOISE_GLSL = `
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -158,13 +158,13 @@ export class Graphics {
   }
 
   _clouds() {
-    const N = this.mobile ? 160 : 320;
+    const N = this.mobile ? 200 : 420;
     this.clouds = new Billboards(N, cloudTexture(), { fog: false, shade: true });
     this.clouds.mat.uniforms.shadeCol.value.set(this.T.skyBottom).lerp(new THREE.Color(0x8090b0), 0.4);
     this.cloudBase = [];
     let i = 0;
     while (i < N) {
-      const a = Math.random() * Math.PI * 2, r = 300 + Math.random() * 1800;
+      const a = Math.random() * Math.PI * 2, r = 300 + Math.random() * 3200;
       const cx = Math.cos(a) * r, cz = Math.sin(a) * r, cy = 210 + Math.random() * 120;
       const n = 5 + Math.floor(Math.random() * 6), w = 60 + Math.random() * 80;
       for (let k = 0; k < n && i < N; k++, i++) {
@@ -216,7 +216,7 @@ export class Graphics {
         }`,
       transparent: !T.frozen, fog: true, depthWrite: !!T.frozen,
     });
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000, 1, 1), this.waterMat);
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000, 1, 1), this.waterMat);
     water.rotation.x = -Math.PI / 2; water.position.y = T.frozen ? 0.02 : -0.05;
     water.receiveShadow = false;
     this.scene.add(water);
@@ -224,46 +224,65 @@ export class Graphics {
   }
 
   // 풀: 플레이어 주변에서 계속 돌려쓰는 풀밭 (지형 높이를 그림으로 만들어서 읽음)
-  _grass() {
-    const HS = 900, N = this.mobile ? 512 : 900;
-    const data = new Uint16Array(N * N * 4), toH = THREE.DataUtils.toHalfFloat;
-    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-      const x = -HS + (i + 0.5) / N * HS * 2, z = -HS + (j + 0.5) / N * HS * 2;
-      const h = terrainHeight(x, z);
-      const w = zoneWeights(x, z);
-      let dens = 1, tint = 0;
-      if (h < 0.5) dens = 0;
-      dens *= 1 - Math.max(0, Math.min(1, (w[0] - 0.15) * 3));
-      if (w[1] > 0.4) { tint = 2; dens *= 0.6; }
-      if (w[2] > 0.4) { tint = 1; dens *= 0.55; }
-      const rd = roadDist(x, z);
-      if (rd < ROAD.width + 2) dens = 0; else if (rd < ROAD.width + 5) dens *= (rd - ROAD.width - 2) / 3;
-      if (Math.hypot(x, z) < 31) dens = 0;
-      for (const k in SITES) { const F = SITES[k]; if (Math.hypot(x - F.x, z - F.z) < F.r * 0.8) dens = 0; }
-      const k = (j * N + i) * 4;
-      data[k] = toH(h); data[k + 1] = toH(dens); data[k + 2] = toH(tint); data[k + 3] = toH(1);
+  // 풀 높이 정보: 플레이어 주변만 (움직이면 조금씩 다시 계산)
+  _grassCell(x, z) {
+    const h = terrainHeight(x, z);
+    const w = zoneWeights(x, z);
+    let dens = 1, tint = 0;
+    if (h < 0.5) dens = 0;
+    dens *= 1 - Math.max(0, Math.min(1, (w[0] - 0.15) * 3));
+    if (w[1] > 0.4) { tint = 2; dens *= 0.6; }
+    if (w[2] > 0.4) { tint = 1; dens *= 0.55; }
+    if (h > 60) dens *= Math.max(0, 1 - (h - 60) / 50);
+    const sn = snowAmount(x, z); if (sn > 0) dens *= 1 - sn;
+    const rd = roadDist(x, z);
+    if (rd < ROAD.width + 2) dens = 0; else if (rd < ROAD.width + 5) dens *= (rd - ROAD.width - 2) / 3;
+    if (Math.hypot(x, z) < 31) dens = 0;
+    for (const k in SITES) { const F = SITES[k]; if (Math.hypot(x - F.x, z - F.z) < F.r * 0.8) dens = 0; }
+    return [h, dens, tint];
+  }
+  _grassWindow(cx, cz, rows) { // rows줄만 계산하고, 다 끝나면 텍스처 교체
+    const G = this.gw, N = G.N, toH = THREE.DataUtils.toHalfFloat;
+    if (!G.job) G.job = { cx, cz, j: 0, data: new Uint16Array(N * N * 4) };
+    const J = G.job;
+    for (let r = 0; r < rows && J.j < N; r++, J.j++) {
+      for (let i = 0; i < N; i++) {
+        const x = J.cx - G.HS + (i + 0.5) / N * G.HS * 2, z = J.cz - G.HS + (J.j + 0.5) / N * G.HS * 2;
+        const [h, d, t] = this._grassCell(x, z), k = (J.j * N + i) * 4;
+        J.data[k] = toH(h); J.data[k + 1] = toH(d); J.data[k + 2] = toH(t); J.data[k + 3] = toH(1);
+      }
     }
-    // 가파른 곳(절벽)에는 풀이 없게
-    const tex = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.HalfFloatType);
+    if (J.j >= N) {
+      G.tex.image.data.set(J.data); G.tex.needsUpdate = true;
+      G.center.set(J.cx, J.cz); G.job = null;
+    }
+  }
+  _grass() {
+    const HS = this.mobile ? 200 : 260, N = this.mobile ? 160 : 256;
+    const tex = new THREE.DataTexture(new Uint16Array(N * N * 4), N, N, THREE.RGBAFormat, THREE.HalfFloatType);
     tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter; tex.needsUpdate = true;
+    this.gw = { HS, N, tex, center: new THREE.Vector2(1e9, 1e9), job: null };
+    this._grassWindow(this.world.spawn?.pos.x || 0, this.world.spawn?.pos.z || 0, N);
 
     const T = this.T;
     this.grassMat = new THREE.ShaderMaterial({
       uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
-        hm: { value: null }, hs: { value: HS }, tile: { value: 84 }, inner: { value: 0 }, bscale: { value: 1 }, center: { value: new THREE.Vector2() }, player: { value: new THREE.Vector3() }, time: { value: 0 },
+        hm: { value: null }, hs: { value: HS }, hmC: { value: this.gw.center }, tile: { value: 84 }, inner: { value: 0 }, bscale: { value: 1 }, center: { value: new THREE.Vector2() }, player: { value: new THREE.Vector3() }, time: { value: 0 },
         cA: { value: new THREE.Color(T.grassB).multiplyScalar(0.75) }, cB: { value: new THREE.Color(T.grassA).lerp(new THREE.Color(0xeaff9a), 0.25) },
         dryA: { value: new THREE.Color(0x9a8a3a) }, dryB: { value: new THREE.Color(0xe8d27a) },
         purA: { value: new THREE.Color(0x3a4a3a) }, purB: { value: new THREE.Color(0x9a7ac8) },
         sunDir: { value: this.sunDir },
       }]),
       vertexShader: `
-        uniform sampler2D hm; uniform float hs, tile, time, inner, bscale; uniform vec2 center; uniform vec3 player;
+        uniform sampler2D hm; uniform float hs, tile, time, inner, bscale; uniform vec2 center, hmC; uniform vec3 player;
         attribute vec3 aOff; varying float vY; varying vec3 vTint; varying float vFlower; varying float vRand;
         #include <fog_pars_vertex>
         void main(){
           vec2 rel = mod(aOff.xy - center + tile * 0.5, tile) - tile * 0.5;
           vec2 wp = center + rel;
-          vec4 h = texture2D(hm, (wp + hs) / (2.0 * hs));
+          vec2 huv = (wp - hmC + hs) / (2.0 * hs);
+          vec4 h = texture2D(hm, huv);
+          if (huv.x < 0.0 || huv.x > 1.0 || huv.y < 0.0 || huv.y > 1.0) h.g = 0.0;
           float r = aOff.z;
           float keep = step(r, h.g);
           float fade = (1.0 - smoothstep(tile * 0.36, tile * 0.5, length(rel))) * smoothstep(inner, inner + 10.0, length(rel));
@@ -313,7 +332,7 @@ export class Graphics {
       base.setAttribute('aOff', new THREE.InstancedBufferAttribute(off, 3));
       base.instanceCount = count;
       const mat = this.grassMat.clone();
-      mat.uniforms.hm.value = tex; mat.uniforms.tile.value = tile; mat.uniforms.inner.value = inner; mat.uniforms.bscale.value = bscale;
+      mat.uniforms.hm.value = tex; mat.uniforms.hmC.value = this.gw.center; mat.uniforms.tile.value = tile; mat.uniforms.inner.value = inner; mat.uniforms.bscale.value = bscale;
       const mesh = new THREE.Mesh(base, mat);
       mesh.frustumCulled = false;
       this.scene.add(mesh);
@@ -322,7 +341,7 @@ export class Graphics {
     // 가까운 풀(촘촘) + 먼 풀(크고 듬성듬성, 시야 끝까지)
     this.grassLayers = this.mobile
       ? [makeLayer(14000, 56, 0, 1), makeLayer(26000, 230, 20, 1.7)]
-      : [makeLayer(60000, 84, 0, 1), makeLayer(90000, 380, 30, 1.8)];
+      : [makeLayer(60000, 84, 0, 1), makeLayer(90000, 440, 30, 1.8)];
     this.grass = this.grassLayers[0];
   }
 
@@ -346,10 +365,15 @@ export class Graphics {
     // 구름
     const drift = time * 3;
     this.cloudBase.forEach((c, i) => {
-      let x = c[0] + drift; x = ((x + 2200) % 4400 + 4400) % 4400 - 2200;
+      let x = c[0] + drift; x = ((x + 3600) % 7200 + 7200) % 7200 - 3600;
       this.clouds.set(i, x, c[1], c[2], c[3], 1, 1, 1, 0.9);
     });
     this.clouds.flush();
+    if (this.gw) {
+      const G = this.gw;
+      if (G.job) this._grassWindow(0, 0, this.mobile ? 10 : 16);
+      else if (Math.hypot(focus.x - G.center.x, focus.z - G.center.z) > G.HS * 0.3) this._grassWindow(focus.x, focus.z, this.mobile ? 10 : 16);
+    }
     if (this.grassLayers) for (const g of this.grassLayers) {
       const u = g.material.uniforms;
       u.time.value = time; u.center.value.set(focus.x, focus.z); u.player.value.copy(focus);

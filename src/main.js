@@ -20,6 +20,7 @@ import { Scientist, GearHologram, LINES, RADIO_FRIEND } from './story.js';
 import { loadProgress, recoverCrystal, BIG_CRYSTALS } from './progress.js';
 import { readSave, hasAnySave } from './save.js';
 import { PauseMenu, showLoadList } from './menu.js';
+import { Guardians } from './guardian.js';
 
 function showError(msg) {
   let box = document.getElementById('err');
@@ -64,7 +65,7 @@ function boot() {
   const renderer = createRenderer(isTouch);
   document.body.prepend(renderer.domElement);
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 3000);
+  const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 5200);
   game.scene = scene; game.camera = camera; game.renderer = renderer;
 
   const playerCount = 1; // 같이 하기는 4단계에서
@@ -72,19 +73,22 @@ function boot() {
 
   game.input = new Input(renderer.domElement);
   game.world = new World(scene, STAGE.theme, { mobile: isTouch });
+  game.world.stream(game.world.spawn.pos, 0, true); // 시작 지점 주변 미리 만들기
   game.gfx = new Graphics(renderer, scene, camera, game.world, isTouch);
   game.fx = new Effects(scene, game);
   game.pickups = new Pickups(scene);
   game.enemies = new Enemies(scene, game.world, game.world.enemySpots, game.fx, game.pickups, game);
   game.rings = new Rings(scene, game.world, game.world.ringSpots);
   const missionSeed = LOAD ? LOAD.seed : 1001 + Math.floor(Math.random() * 100000);
-  game.missions = new Missions(missionSeed, { walls: true });
+  const makeMissions = (kind) => new Missions(missionSeed, { walls: kind === 'power' });
+  game.missions = makeMissions(LOAD ? LOAD.char : 'speed');
   game.hud = new HUD(game.input);
   game.cam = new CameraRig(camera);
   const cine = new Cinematic();
   game.cine = cine;
   const sci = new Scientist(scene);
   const holo = new GearHologram(scene);
+  const guardians = new Guardians(game);
   const W = game.world;
 
   window.addEventListener('resize', () => {
@@ -300,8 +304,8 @@ function boot() {
         if (r.newlyUnlockedHard) setTimeout(() => game.hud.toast('⭐ 다섯 크리스탈을 모두 되찾았다! 시작 화면에서 "도전 모드"를 할 수 있어요!', 'gold'), 2600);
         showStageInfo();
       } },
-    { title: '🎉 스테이지 클리어!', target: () => { if (stageIdx + 1 >= STAGES.length) return null; const r = Math.hypot(pl.pos.x, pl.pos.z) || 1; return V(pl.pos.x / r * CFG.world.exitR, 0, pl.pos.z / r * CFG.world.exitR); },
-      text: () => stageIdx + 1 < STAGES.length ? `아무 방향으로나 맵 끝까지 달려가면 ${NAMES.stages[stageIdx + 1]}(으)로!` : '다음 이야기는 아직 만드는 중이에요! 자유롭게 달려보세요',
+    { title: '🎉 스테이지 클리어!', target: () => (stageIdx + 1 >= STAGES.length ? null : pl.pos.z < W.exitGate.z ? W.exitGate : V(0, 0, CFG.world.exitR + 40)),
+      text: () => stageIdx + 1 < STAGES.length ? `북쪽 눈길을 따라 끝까지 달려가면 ${NAMES.stages[stageIdx + 1]}(으)로! ❄️` : '다음 이야기는 아직 만드는 중이에요! 자유롭게 달려보세요',
       done: () => false },
   ];
   function bossDefeated() { game.musicHold = 9; SFX.quest(); game.hud.setBoss(null); for (const p of game.players) p.shake = 1.2; }
@@ -410,6 +414,7 @@ function boot() {
       sci.update(dt, game.time);
       holo.update(dt, game.time);
       game.fx.update(dt);
+      W.stream(camera.position, dt);
       game.gfx.update(dt, game.time, pl.pos);
       input.update(dt);
       for (const b of Object.values(input.buttons)) { b.pressed = false; b.released = false; }
@@ -434,6 +439,7 @@ function boot() {
     game.boss?.update(dt, game.time);
     sci.update(dt, game.time);
     game.cam.update(dt, pl, input, W);
+    W.stream(pl.pos, dt);
     game.gfx.update(dt, game.time, pl.pos);
 
     if (!game.hard) for (const m of game.missions.check(pl.stats)) giveSeed(m);
@@ -446,7 +452,10 @@ function boot() {
       else { const t = questText(Q); if (game.hud.questText.textContent !== t) game.hud.questText.textContent = t; }
     }
     if (game.boss && game.boss.alive && game.boss.state !== 'enter') game.hud.setBoss(`🤖 ${game.boss.name}`, game.boss.hp / game.boss.maxHp);
-    if (!W.barrierUp && stageIdx + 1 < STAGES.length && Math.hypot(pl.pos.x, pl.pos.z) > CFG.world.exitR) goNextStage();
+    if (!W.barrierUp && stageIdx + 1 < STAGES.length && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) goNextStage();
+    // 장벽을 몰래 넘어가면 기어 군단이 막음
+    if (W.barrierUp && pl.alive && Math.hypot(pl.pos.x, pl.pos.z) > CFG.world.barrierR + 8) guardians.trigger();
+    guardians.update(dt);
 
     bigStar.rotation.y = game.time * 1.5;
     let dist = null;
@@ -475,6 +484,7 @@ function boot() {
       camera.up.set(0, 1, 0);
       camera.position.set(pl.pos.x + Math.sin(t) * 5.5, pl.pos.y + 1.0, pl.pos.z + Math.cos(t) * 5.5);
       camera.lookAt(pl.pos.x, pl.pos.y - 0.6, pl.pos.z);
+      W.stream(pl.pos, dt);
       game.gfx.update(dt, game.time, pl.pos);
       W.update(dt, game.time);
       game.gfx.render();
@@ -550,6 +560,7 @@ function boot() {
     }
     pl.spawnAt(W.spawn.pos, W.spawn.yaw);
     game.cam.yaw = W.spawn.yaw; game.cam.first = true;
+    game.missions = makeMissions(pl.kind); // 파워형이 아니면 '벽 부수기' 시련은 안 나옴
     if (game.hard) for (const e of game.enemies.list) { e.maxHp = Math.round(e.T.hp * CFG.hard.enemyHp); e.hp = e.maxHp; }
     showStageInfo();
     started = true;
@@ -580,6 +591,7 @@ function boot() {
     initAudio();
     document.getElementById('start').classList.add('hidden');
     applySave(LOAD);
+    W.stream(pl.pos, 0, true);
     game.cam.yaw = pl.yaw; game.cam.first = true;
     if (game.hard) for (const e of game.enemies.list) { e.maxHp = Math.round(e.T.hp * CFG.hard.enemyHp); e.hp = Math.min(e.hp, e.maxHp) || e.maxHp; }
     showStageInfo();

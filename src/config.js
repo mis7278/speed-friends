@@ -73,6 +73,8 @@ export const CFG = {
   boss: { hp: 8, chaseSpeed: 16, stunTime: 3.5, missileSpeed: 17 },
   items: {
     healAmount: 30,       // 체력 아이템 회복량(%)
+    ringBagChance: 0.08,  // 나무·바위를 부쉈을 때 '링 주머니(+30)'가 나올 확률
+    ringBag: 30,
     maxStored: 9,         // 아이템 칸에 보관 가능한 개수
   },
   super: {
@@ -96,8 +98,9 @@ export const CFG = {
   },
   water: { runSpeed: 20, swimDepth: -1.0, slow: 0.55 },
   boostPad: { speed: 40 },
+  cannon: { speed: 85, flightTime: 2.6 }, // 하늘 섬 대포: 발사 속도, 멀리 날아가는 시간(초)
   spring: { power: 27 },
-  world: { barrierR: 840, exitR: 880, terrainHalf: 1400 },
+  world: { barrierR: 1680, exitR: 2150, terrainHalf: 2600 },
   camera: {
     distance: 9.5,
     minPitch: -0.25,

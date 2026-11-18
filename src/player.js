@@ -53,6 +53,7 @@ export class Player {
     this.flying = false; this.flyGauge = CFG.flyer.gaugeMax; this.tornadoCD = 0;
     this.gliding = false; this.punchT = 0;
     this.blink = null; this.ult = null; this.ultCD = 0; this.flashV = 0; this.hidden = false;
+    this.springLevel = 0; this.springChain = false; this.rollLimit = 0; this.cannon = null; this.cannonT = 0;
   }
 
   get grounded() { return this.state === 'ground' || this.state === 'charge' || this.state === 'loop'; }
@@ -71,6 +72,7 @@ export class Player {
   spawnAt(p, yaw = 0) {
     this.pos.copy(p); this.vel.set(0, 0, 0); this.yaw = yaw; this.s = 0; this.gear = 1;
     this.state = 'ground'; this.ball = this.rolling = this.slamming = false;
+    this.loop = null; this.loopCD = 0; this.cannon = null; this.springChain = false;
     this.cancelAbilities();
     this.pos.y = this.game.world.groundAt(p.x, p.z, p.y + 2);
   }
@@ -103,6 +105,8 @@ export class Player {
     const locked = this.controlLock > 0;
 
     if (this.blink) { this.updateBlink(dt); this.finishFrame(dt); return; }
+    if (this.state === 'cannon') { this.updateCannon(dt, input); this.finishFrame(dt); return; }
+    this.cannonT = Math.max(0, this.cannonT - dt);
     if (this.ult) { this.updateUlt(dt); this.finishFrame(dt); return; }
 
     // ----- A 버튼 -----
@@ -128,6 +132,15 @@ export class Player {
       } else if (this.state === 'charge') {
         if (this.chargeLevel < P.spinMaxTaps) { this.chargeLevel++; SFX.spinCharge(this.chargeLevel); }
       } else if (this.state === 'air' && !this.slamming) this.startSlam();
+    }
+    // ----- C 버튼: 스핀 발사 / 달리다가 몸을 말아 구르기 -----
+    const Cb = input.buttons.c;
+    if (!locked && Cb && Cb.pressed) {
+      if (this.state === 'charge') this.launchSpin();
+      else if (this.state === 'ground' || this.state === 'loop') {
+        if (this.rolling) { this.rolling = false; this.ball = false; }
+        else if (this.s > 3) { this.rolling = true; this.ball = true; this.rollTime = 0; this.rollLimit = 1.4; SFX.roll(); this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.4, 0)), 0xffffff, 5, 3); }
+      }
     }
 
     // ----- 상태별 움직임 -----
@@ -233,7 +246,8 @@ export class Player {
     const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     const c = this.pos.clone().addScaledVector(fwd, 1.6);
     this.s = Math.max(this.s, 6);
-    for (const e of this.game.enemies.inRadius(c, CFG.power.punchRange)) if (this.game.enemies.hit(e, 2, this.pos, 20)) this.onKill();
+    for (const e of this.game.enemies.inRadius(c, CFG.power.punchRange)) if (this.game.enemies.hit(e, this.superOn ? 8 : 4, this.pos, 20)) this.onKill();
+    this.smashAround(c, CFG.power.punchRange);
     this.game.boss?.tryHit(this, c, CFG.power.punchRange, 1);
     for (const w of this.game.world.walls) {
       if (w.dead) continue;
@@ -271,7 +285,7 @@ export class Player {
         this.pos.copy(b.target).addScaledVector(b.dir, -1.2); this.pos.y += 1.2;
         const R = B.energyRadius * (this.superOn ? 1.5 : 1);
         let n = 0;
-        for (const e of this.game.enemies.inRadius(this.pos, R)) if (this.game.enemies.hit(e, this.superOn ? 2 : 1, this.pos, 14)) { n++; this.onKill(); }
+        for (const e of this.game.enemies.inRadius(this.pos, R)) if (this.game.enemies.hit(e, this.superOn ? 6 : 3, this.pos, 14)) { n++; this.onKill(); }
         if (this.game.boss?.tryHit(this, this.pos, R, 1)) n++;
         this.game.fx.shockwave(this.pos, R, 0x9a5cff);
         this.game.fx.burst(this.pos.clone(), 0x6a2cff, 24, 10);
@@ -347,12 +361,18 @@ export class Player {
       this.pos.y = this.game.world.groundAt(this.pos.x, this.pos.z, this.pos.y);
       if (Math.random() < 0.3) this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(-wish.x, 0.2, -wish.z)), 0xd9c9a0, 1, 3);
     } else {
-      // 방향키를 떼면 발사!
+      this.carry(dt);
+      this.pos.y = this.game.world.groundAt(this.pos.x, this.pos.z, this.pos.y);
+    }
+  }
+  launchSpin() { // C 버튼: 스핀 속도로 튀어나가기!
+    const P = CFG.player;
+    {
       this.s = (P.spinLaunchBase + P.spinLaunchPerTap * (this.chargeLevel - 1)) * this.mul();
       this.gear = this.gearFor(this.s);
       this.yaw = Math.atan2(this.chargeDir.x, this.chargeDir.z);
       this.state = 'ground';
-      this.rolling = true; this.ball = true; this.rollTime = 0;
+      this.rolling = true; this.ball = true; this.rollTime = 0; this.rollLimit = P.rollToRun;
       if (this.chargeLevel >= P.spinMaxTaps) this.stats.maxSpins++;
       SFX.spinLaunch(this.chargeLevel);
       this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.3, 0)), 0xffffff, 6 + this.chargeLevel, 6);
@@ -374,7 +394,8 @@ export class Player {
     const P = CFG.player;
     const R = P.slamRadius * (this.superOn ? 1.5 : 1);
     let n = 0;
-    for (const e of this.game.enemies.inRadius(this.pos, R)) if (this.game.enemies.hit(e, 2, this.pos, 18)) { n++; this.onKill(); }
+    for (const e of this.game.enemies.inRadius(this.pos, R)) if (this.game.enemies.hit(e, this.superOn ? 6 : 3, this.pos, 18)) { n++; this.onKill(); }
+    this.smashAround(this.pos, R * 0.8);
     this.game.boss?.tryHit(this, this.pos, R, 1);
     if (n >= 3) this.stats.slamMulti = 1;
     this.game.fx.shockwave(this.pos, R, 0xffffff);
@@ -400,7 +421,7 @@ export class Player {
         const fast = this.s / m;
         const rate = P.turnRate * (this.rolling ? 0.5 : 1) * (fast > 20 ? 0.6 : 1) * (fast > 34 ? 0.7 : 1);
         this.yaw += Math.sign(d) * Math.min(Math.abs(d), rate * dt);
-        if (this.rolling) { this.rollTime += dt; if (this.rollTime >= P.rollToRun) { this.rolling = false; this.ball = false; } }
+        if (this.rolling) { this.rollTime += dt; if (this.rollTime >= (this.rollLimit || P.rollToRun)) { this.rolling = false; this.ball = false; } }
         const top = this.cap(this.gear) * waterMul * Math.max(0.35, wishLen) * (Math.abs(d) > 1.2 ? 0.8 : 1);
         if (this.s < top) this.s = Math.min(top, this.s + CFG.gears[this.gear - 1].accel * m * dt);
         else if (this.s > this.cap(3) * waterMul) this.s = Math.max(top, this.s - P.overDecay * m * dt); // 스핀·가속 발판 속도는 천천히 줄어듦
@@ -444,11 +465,15 @@ export class Player {
     const oldY = this.pos.y, ox = this.pos.x, oz = this.pos.z;
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
-    if (world.collide(this.pos, P.radius, P.height, this.vel)) {
-      const hs = Math.hypot(this.vel.x, this.vel.z);
+    const v0x = this.vel.x, v0z = this.vel.z;
+    if (world.collide(this.pos, P.radius, P.height, this.vel, oldY)) {
       if (world.lastHitBox?.breakable) this.tryBreak(world.lastHitBox);
-      this.s = Math.min(this.s, hs);
-      if (hs > 0.5) this.yaw = Math.atan2(this.vel.x, this.vel.z);
+      if (world.lastHitTree && this.smashTree(world.lastHitTree)) { this.vel.x = v0x; this.vel.z = v0z; }
+      else {
+        const hs = Math.hypot(this.vel.x, this.vel.z);
+        this.s = Math.min(this.s, hs);
+        if (hs > 0.5) this.yaw = Math.atan2(this.vel.x, this.vel.z);
+      }
     }
     let g = this.groundHere(this.pos.x, this.pos.z, oldY);
     // 절벽: 너무 가파르면 못 올라감 (옆으로 미끄러지기)
@@ -494,18 +519,47 @@ export class Player {
   // 트랙 위에서의 위치 = (loopT: 트랙을 따라 얼마나 왔는지 0~1, loopLat: 트랙 가운데에서 옆으로 얼마나)
   // 속도 = (loopVt: 트랙 방향 속도, loopVu: 옆 방향 속도). 방향키: 위=앞으로, 아래=브레이크, 좌우=옆으로.
   checkLoopEntry() {
-    if (this.loopCD > 0 || this.s < 3) return;
+    if (this.loopCD > 0) return;
     const hv = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     for (const L of this.game.world.loops) {
-      const rel = this.pos.clone().sub(L.entry);
-      const along = rel.dot(L.fwd), lat = rel.dot(L.side);
-      const cos = hv.dot(L.fwd);
-      if (along > -0.5 && along < 1.5 && Math.abs(lat) < L.width / 2 && cos > 0.25) {
-        this.state = 'loop'; this.loop = L; this.loopT = Math.max(0.001, along / L.length); this.loopLat = lat;
-        this.loopVt = this.s * cos; this.loopVu = this.s * hv.dot(L.side);
-        return;
+      const cos = hv.dot(L.fwd), sn = hv.dot(L.side);
+      // 입구 쪽
+      let rel = this.pos.clone().sub(L.entry), along = rel.dot(L.fwd), lat = rel.dot(L.side);
+      if (along > -0.6 && along < 1.2 && Math.abs(lat) < L.width / 2 && (cos > -0.2 || this.s < 2)) {
+        this.state = 'loop'; this.loop = L; this.loopT = Math.max(0.002, along / L.length); this.loopLat = lat;
+        this.loopVt = this.s * cos; this.loopVu = this.s * sn; return;
+      }
+      // 출구 쪽 (거꾸로 들어가기)
+      rel = this.pos.clone().sub(L.exit); along = rel.dot(L.fwd); lat = rel.dot(L.side);
+      if (along < 0.6 && along > -1.2 && Math.abs(lat) < L.width / 2 && cos < -0.2) {
+        this.state = 'loop'; this.loop = L; this.loopT = 1 - Math.max(0.002, -along / L.length); this.loopLat = lat;
+        this.loopVt = this.s * cos; this.loopVu = this.s * sn; return;
       }
     }
+  }
+  // 공중에서 루프 트랙 안쪽 면에 떨어지면 그 위에 착지
+  checkLoopLanding() {
+    if (this.loopCD > 0 || this.vel.lengthSq() < 1) return false;
+    for (const L of this.game.world.loops) {
+      const C = L.base.clone(); C.y += L.R;
+      const rel = this.pos.clone().sub(C);
+      const along = rel.dot(L.fwd), up = rel.y;
+      const d = Math.hypot(along, up);
+      if (d < L.R - 0.4 || d > L.R + 1.2 || this.pos.y < L.base.y + 1.2) continue;
+      let a = Math.atan2(along, -up); if (a < 0) a += Math.PI * 2;
+      const t = a / (Math.PI * 2);
+      const pt = L.pathAt(t), lat = this.pos.clone().sub(pt).dot(L.side);
+      if (Math.abs(lat) > L.width / 2) continue;
+      const out = new THREE.Vector3().addScaledVector(L.fwd, along / d).setY(up / d);
+      if (this.vel.dot(out) < 0) continue;            // 바깥쪽(트랙 면)으로 움직일 때만
+      const T = L.tangentAt(t);
+      this.state = 'loop'; this.loop = L; this.loopT = t; this.loopLat = lat;
+      this.loopVt = this.vel.dot(T); this.loopVu = this.vel.dot(L.side);
+      this.slamming = false; this.superFlight = this.flying = this.gliding = false;
+      L.pathAt(t, this.pos).addScaledVector(L.side, lat);
+      return true;
+    }
+    return false;
   }
 
   updateLoop(dt, wish, hasMove) {
@@ -516,7 +570,7 @@ export class Player {
     const g = CFG.player.gravity * C.gravityScale;
     // 트랙 방향: 앞 키 = 가속(최고 속도까지), 아래 키 = 브레이크, 놓으면 조금씩 느려짐
     if (fwdIn > 0.2) { if (this.loopVt < this.cap(this.gear)) this.loopVt += C.push * m * fwdIn * dt; }
-    else if (fwdIn < -0.2) this.loopVt -= Math.sign(this.loopVt) * Math.min(Math.abs(this.loopVt), CFG.player.brake * 0.5 * m * dt);
+    else if (fwdIn < -0.2) { if (this.loopVt > 1) this.loopVt -= Math.min(this.loopVt, CFG.player.brake * 0.5 * m * dt); else if (this.loopVt > -this.cap(1)) this.loopVt -= C.push * m * -fwdIn * dt; }
     else this.loopVt -= Math.sign(this.loopVt) * Math.min(Math.abs(this.loopVt), 2 * dt);
     this.loopVt -= g * Math.sin(a) * dt;            // 올라갈 때 중력 때문에 느려지고, 내려올 때 빨라짐
     if (this.loopVt > this.cap(3) * 1.6) this.loopVt -= CFG.player.overDecay * dt;
@@ -526,10 +580,11 @@ export class Player {
     this.loopT += this.loopVt * dt / L.length;
     this.loopLat += this.loopVu * dt;
     this.s = Math.hypot(this.loopVt, this.loopVu);
+    if (this.rolling) { this.rollTime += dt; if (this.rollTime >= (this.rollLimit || 1.4) && fwdIn > 0.2) this.rolling = false; }
     this.ball = this.rolling;
     const surfVel = () => L.tangentAt(Math.min(1, Math.max(0, this.loopT))).multiplyScalar(this.loopVt).addScaledVector(L.side, this.loopVu);
     const leave = (toGround) => {
-      this.loop = null; this.loopCD = 0.8;
+      this.loop = null; this.loopCD = toGround ? 0 : 0.8; // 땅으로 나오면 바로 다시 탈 수 있음 (통과 방지)
       const v = surfVel();
       if (toGround) { this.state = 'ground'; this.s = Math.hypot(v.x, v.z); this.yaw = Math.atan2(v.x, v.z); this.slopeVy = 0; this.gear = this.gearFor(this.s); }
       else { this.vel.copy(v); this.state = 'air'; this.airActionUsed = false; this.rolling = false; }
@@ -571,6 +626,7 @@ export class Player {
       if (Math.random() < 0.6) this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), 0xffe680, 1, 2);
     } else {
       let grav = this.dashTime > 0 ? P.gravity * 0.25 : P.gravity;
+      if (this.cannonT > 0) grav *= 0.35;
       if (this.flying) {
         grav *= CFG.flyer.gravityMul;
         this.flyGauge = Math.max(0, this.flyGauge - CFG.flyer.drainPerSec * dt);
@@ -595,7 +651,12 @@ export class Player {
     const world = this.game.world;
     const oldY = this.pos.y, ox = this.pos.x, oz = this.pos.z;
     this.pos.addScaledVector(this.vel, dt);
-    if (world.collide(this.pos, P.radius, P.height, this.vel) && world.lastHitBox?.breakable) this.tryBreak(world.lastHitBox);
+    const v0x = this.vel.x, v0z = this.vel.z;
+    if (world.collide(this.pos, P.radius, P.height, this.vel, oldY)) {
+      if (world.lastHitBox?.breakable) this.tryBreak(world.lastHitBox);
+      if (world.lastHitTree && this.smashTree(world.lastHitTree)) { this.vel.x = v0x; this.vel.z = v0z; }
+    }
+    if (this.checkLoopLanding()) return;
     let g = world.groundAt(this.pos.x, this.pos.z, Math.max(oldY, this.pos.y));
     let surf = world.lastSurface;
     if ((surf === 'water' || surf === 'shallow') && hs >= CFG.water.runSpeed && oldY >= -0.2) { g = Math.max(g, 0); surf = 'waterRun'; }
@@ -610,6 +671,7 @@ export class Player {
 
   land(g, surf) {
     this.pos.y = g;
+    this.springChain = false; this.springLevel = 0; this.cannonT = 0;
     this.state = 'ground';
     this.s = Math.hypot(this.vel.x, this.vel.z);
     if (this.s > 0.5) this.yaw = Math.atan2(this.vel.x, this.vel.z);
@@ -629,12 +691,22 @@ export class Player {
   // ---------------- 주변과 부딪힘 ----------------
   interact(dt) {
     const world = this.game.world;
+    this.cannonCD = Math.max(0, (this.cannonCD || 0) - dt);
+    if (this.state === 'air' && this.cannonCD <= 0) for (const c of world.cannons) {
+      const m = c.mouth().add(new THREE.Vector3(Math.sin(c.yaw) * Math.cos(c.pitch), Math.sin(c.pitch), Math.cos(c.yaw) * Math.cos(c.pitch)).multiplyScalar(2.5));
+      if (m.distanceTo(this.pos.clone().setY(this.pos.y + 0.8)) < 2.6) { this.enterCannon(c); return; }
+    }
+    this.leafFx(dt);
     for (const sp of world.springs) {
       const dx = this.pos.x - sp.pos.x, dz = this.pos.z - sp.pos.z;
       if (dx * dx + dz * dz < 1.5 * 1.5 && this.pos.y > sp.pos.y - 0.3 && this.pos.y < sp.top + 1.0 && this.vel.y <= 0.5 && this.state !== 'loop') {
+        const chain = this.state === 'air' && this.springChain;
+        this.springLevel = chain ? Math.min(3, this.springLevel + 1) : 1;
+        this.springChain = true;
         this.state = 'air'; this.standOn = null;
         this.pos.y = sp.top;
-        this.vel.y = sp.power * (this.superOn ? 1.2 : 1);
+        this.vel.y = sp.power * [1, 1.45, 1.9][this.springLevel - 1] * (this.superOn ? 1.2 : 1);
+        if (this.springLevel > 1) { this.game.hud.toast(this.springLevel === 3 ? '🔼🔼🔼 스프링 3단! 최고 높이!' : '🔼🔼 스프링 2단!'); this.game.fx.shockwave(sp.pos.clone().setY(sp.top), 2 + this.springLevel, 0xffe14d); }
         this.vel.x *= 0.5; this.vel.z *= 0.5;
         this.ball = this.rolling = this.slamming = false;
         this.cancelAbilities();
@@ -687,7 +759,7 @@ export class Player {
       if (dh > e.radius + 0.7 || dy > 1.6) continue;
       const stomp = this.state === 'air' && this.vel.y < -2 && center.y > ec.y + 0.4;
       if (this.attacking || stomp) {
-        if (this.game.enemies.hit(e, this.superOn ? 3 : 1, this.pos, 12)) {
+        if (this.game.enemies.hit(e, stomp && !this.attacking ? 2 : this.attackDamage(), this.pos, 12)) {
           this.onKill();
           if (this.state === 'air' && !this.slamming && !this.superFlight && !this.gliding) {
             this.vel.y = CFG.player.bounceVel;
@@ -704,6 +776,79 @@ export class Player {
       } else if (this.invuln <= 0) {
         this.hurt(e.pos);
       }
+    }
+  }
+
+  // 지금 공격의 세기
+  attackDamage() {
+    const sp = this.state === 'air' ? Math.hypot(this.vel.x, this.vel.z) : Math.abs(this.s);
+    let d = 1;
+    if (this.slamming) d = 3;
+    else if (this.superFlight) d = 5;
+    else if (this.punchT > 0) d = 4;
+    else if (this.dashTime > 0) d = 2 + sp / 20;
+    else if (this.gliding) d = 2;
+    else if (this.ball) d = 1 + sp / 10;      // 구르기: 빠를수록 세게 (초속 32 = 4, 50 = 6)
+    if (this.superOn) d *= 2;
+    return Math.round(d);
+  }
+  canSmash() { return this.superOn || this.kind === 'power'; }
+  // 나무·바위 부수기 (파워형은 언제나, 나머지는 슈퍼일 때)
+  smashTree(t) {
+    if (!t.ref || t.dead || !this.canSmash()) return false;
+    const sp = this.state === 'air' ? Math.hypot(this.vel.x, this.vel.z) : this.s;
+    if (!this.superOn && !(this.attacking || sp > this.cap(1) * 0.6)) return false;
+    const W = this.game.world;
+    if (!W.breakTree(t)) return false;
+    const set = t.ref.set, top = new THREE.Vector3(t.x, t.y + (t.ref.kind === 'rock' ? 0.8 : 3), t.z);
+    if (t.ref.kind === 'rock') { this.game.fx.burst(top, 0x8f8b80, 22, 9); this.game.fx.burst(top, 0x6d6a62, 12, 6); }
+    else { this.game.fx.burst(top, 0x8b5a2b, 14, 8); this.game.fx.leaves(top.clone().setY(t.y + 4), set.leaf, 26); }
+    SFX.wallBreak();
+    this.shake = Math.max(this.shake, 0.15);
+    this.stats.smash = (this.stats.smash || 0) + 1;
+    if (Math.random() < CFG.items.ringBagChance) this.game.pickups.spawnRingBag(top.clone().setY(t.y + 1.5));
+    return true;
+  }
+  // 근처 나무·바위 한꺼번에 (내려찍기·펀치)
+  smashAround(c, r) {
+    if (!this.canSmash()) return;
+    for (const t of this.game.world.treesInRadius(c, r)) this.smashTree(t);
+  }
+  // 빠르게 지나가면 나뭇잎이 떨어짐
+  leafFx(dt) {
+    const sp = this.state === 'air' ? Math.hypot(this.vel.x, this.vel.z) : this.s;
+    if (sp < 16) return;
+    for (const t of this.game.world.treesInRadius(this.pos, 3.8)) {
+      if (t.dead || t.ref?.kind !== 'tree' || (t.leafT || 0) > this.game.time) continue;
+      t.leafT = this.game.time + 2;
+      this.game.fx.leaves(new THREE.Vector3(t.x, t.y + 4.5 * (t.ref.set.data[t.ref.idx]?.s || 1), t.z), t.ref.set.leaf, 8);
+    }
+  }
+
+  // ---------------- 대포 (하늘 섬) ----------------
+  enterCannon(c) {
+    this.cannon = c; this.state = 'cannon'; this.hidden = true; this.vel.set(0, 0, 0); this.s = 0;
+    this.ball = true; this.slamming = false; this.cancelAbilities(); this.hidden = true;
+    SFX.store();
+    this.game.hud.toast('🎯 방향키로 조준하고 A·B·C 버튼으로 발사!', 'gold');
+  }
+  updateCannon(dt, input) {
+    const c = this.cannon, mv = input.move;
+    c.yaw -= mv.x * 1.4 * dt;
+    c.pitch = Math.max(0.1, Math.min(1.25, c.pitch + mv.y * 0.9 * dt));
+    c.group.rotation.y = c.yaw; c.pivot.rotation.x = -c.pitch;
+    this.pos.copy(c.mouth());
+    this.yaw = c.yaw;
+    const B = input.buttons;
+    if (B.a.pressed || B.b.pressed || (B.c && B.c.pressed)) {
+      const dir = new THREE.Vector3(Math.sin(c.yaw) * Math.cos(c.pitch), Math.sin(c.pitch), Math.cos(c.yaw) * Math.cos(c.pitch));
+      this.pos.addScaledVector(dir, 3.6);
+      this.vel.copy(dir).multiplyScalar(CFG.cannon.speed * (this.superOn ? 1.3 : 1));
+      this.state = 'air'; this.hidden = false; this.ball = true; this.dashTime = 0.6; this.cannonT = CFG.cannon.flightTime;
+      this.airActionUsed = false; this.cannon = null; this.cannonCD = 1.5;
+      SFX.explosion(); SFX.boost();
+      this.game.fx.burst(this.pos.clone(), 0xffffff, 16, 10);
+      this.shake = 0.3;
     }
   }
 
@@ -812,7 +957,7 @@ export class Player {
   }
 
   pose() {
-    if (this.ult) return 'cast';
+    if (this.ult || this.state === 'cannon') return 'cast';
     if (this.punchT > 0) return 'punch';
     if (this.grounded) return 'run';
     if (this.superFlight) return 'flight';

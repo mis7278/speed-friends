@@ -122,6 +122,7 @@ export class HUD {
     };
     mk('a', 'A<small>점프</small>', 'tbtn-a');
     mk('b', 'B<small>스핀</small>', 'tbtn-b');
+    mk('c', 'C<small>구르기</small>', 'tbtn-c');
   }
 
   toast(text, cls = '') {

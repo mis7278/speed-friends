@@ -87,6 +87,8 @@ export const SFX = {
   bossRoar() { tone(110, 1.0, { type: 'sawtooth', slide: 55, vol: 0.3 }); tone(116, 1.0, { type: 'sawtooth', slide: 50, vol: 0.2 }); },
   warn() { tone(880, 0.15, { type: 'square', vol: 0.15 }); tone(880, 0.15, { type: 'square', vol: 0.15, delay: 0.25 }); },
   freed() { tone(1200, 0.1, { type: 'triangle', slide: 1800, vol: 0.18, delay: 0.12 }); tone(1600, 0.12, { type: 'triangle', slide: 2400, vol: 0.15, delay: 0.22 }); },
+  roll() { noise(0.35, { vol: 0.35, freq: 900, slide: 3500 }); tone(300, 0.25, { type: 'sawtooth', slide: 900, vol: 0.1 }); },
+  ringBag() { [880, 1100, 1320, 1760].forEach((f, i) => tone(f, 0.12, { vol: 0.2, delay: i * 0.05 })); },
   splash() { noise(0.3, { vol: 0.35, freq: 1200, slide: 400 }); },
 };
 
@@ -133,6 +135,8 @@ export const SFX_INFO = {
   bossRoar: ['보스 등장', '보스가 나타날 때 (기계 굉음)'],
   warn: ['경고음', '보스가 큰 공격을 준비할 때'],
   splash: ['물 첨벙', '물에 들어갈 때'],
+  roll: ['몸 말기 (슝~)', '달리다가 C 버튼으로 구르기 시작'],
+  ringBag: ['링 주머니', '링 주머니(+30)를 먹을 때'],
 };
 export const BGM_INFO = {
   title: ['시작 화면', '캐릭터 고르는 화면'],

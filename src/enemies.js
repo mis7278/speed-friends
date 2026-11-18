@@ -126,12 +126,12 @@ const CRITTER_OF = { beetle: 'bunny', crawler: 'bunny', tank: 'squirrel', wasp: 
 const TYPES = {
   tower: { make: towerMesh, hp: 5, radius: 2.0, speed: 0, color: 0xff5030, static: true, harmless: true, noRespawn: true, big: true },
   machine: { make: machineMesh, hp: 6, radius: 3.6, speed: 0, color: 0xffa030, static: true, harmless: true, noRespawn: true, big: true },
-  beetle: { make: beetleMesh, hp: 1, radius: 1.0, speed: 1, color: 0xe84545 },
-  crawler: { make: beetleMesh, hp: 1, radius: 1.0, speed: 1, color: 0xe84545 },
-  tank: { make: tankMesh, hp: 2, radius: 1.3, speed: 0.75, color: 0xc0652e },
-  wasp: { make: waspMesh, hp: 1, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true },
-  flyer: { make: waspMesh, hp: 1, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true },
-  hopper: { make: hopperMesh, hp: 1, radius: 1.0, speed: 0.9, color: 0x7ac043, hops: true },
+  beetle: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545 },
+  crawler: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545 },
+  tank: { make: tankMesh, hp: 10, armor: 2, radius: 1.3, speed: 0.75, color: 0xc0652e },
+  wasp: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true },
+  flyer: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true },
+  hopper: { make: hopperMesh, hp: 5, armor: 1, radius: 1.0, speed: 0.9, color: 0x7ac043, hops: true },
 };
 
 export class Enemies {
@@ -183,7 +183,7 @@ export class Enemies {
 
   _spawn(sp) {
     const T = TYPES[sp.type] || TYPES.beetle;
-    const mesh = T.make();
+    const mesh = T.static ? T.make() : null;
     const home = sp.pos.clone();
     home.y = this.world.terrainAt(home.x, home.z);
     const e = {
@@ -192,26 +192,44 @@ export class Enemies {
       tag: sp.tag || null, leash: sp.leash || 30, shielded: false,
       wanderT: Math.random() * 10, radius: T.radius, flying: !!T.flying, asleep: false, hopT: Math.random() * 2, vy: 0, hitFlash: 0,
     };
-    mesh.position.copy(e.pos);
+    if (mesh) { mesh.position.copy(e.pos); this.scene.add(mesh); }
     if (T.static) { // 보호막 (주변 로봇을 먼저 물리쳐야 꺼짐)
       e.shield = new THREE.Mesh(new THREE.SphereGeometry(T.radius * 2.6, 20, 14), new THREE.MeshBasicMaterial({ color: 0x66ccff, transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false }));
       e.shield.position.y = T.radius * 1.2; e.shield.visible = false;
       mesh.add(e.shield);
     }
-    this.scene.add(mesh);
     this.list.push(e);
   }
 
+  _ensureMesh(e) {
+    if (e.mesh) return;
+    e.mesh = e.T.make(); e.mesh.position.copy(e.pos); this.scene.add(e.mesh);
+  }
+  // 체력 막대 (맞으면 잠깐 보임)
+  _bar(e) {
+    if (!e.bar) {
+      const g = new THREE.Group();
+      const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.22), new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.75, depthTest: false }));
+      const fill = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 0.14), new THREE.MeshBasicMaterial({ color: 0x3ddc5a, depthTest: false }));
+      fill.position.z = 0.01; fill.geometry.translate(0.75, 0, 0); fill.position.x = -0.75;
+      bg.renderOrder = 20; fill.renderOrder = 21;
+      g.add(bg, fill); g.userData.fill = fill;
+      this.scene.add(g); e.bar = g;
+    }
+    return e.bar;
+  }
   hit(e, dmg, fromPos, knockPower = 10) {
     if (!e.alive || e.dying > 0) return false;
+    if (!e.T.static) dmg = Math.max(1, Math.round(dmg) - (e.T.armor || 0)); // 방어력만큼 덜 아픔
+    e.barT = 4;
     if (e.T.static) { if (e.hitCD > 0) return false; e.hitCD = 0.45; }
     if (e.shielded) { this.fx.burst(e.pos.clone().add(new THREE.Vector3(0, 2, 0)), 0x66ccff, 6, 5); SFX.store(); return false; }
-    e.hp -= Math.min(dmg, e.T.static ? 1 : dmg);
+    e.hp -= e.T.static ? 1 : dmg;
     const dir = e.pos.clone().sub(fromPos).setY(0);
     if (dir.lengthSq() < 0.01) dir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
     dir.normalize();
     if (e.hp > 0) { // 단단한 몬스터: 밀려나기만
-      if (!e.T.static) e.pos.addScaledVector(dir, 2.5);
+      if (!e.T.static) e.pos.addScaledVector(dir, 1.5 + Math.min(2.5, dmg * 0.4));
       e.hitFlash = 0.3;
       if (e.T.static) { this.fx.burst(e.pos.clone().add(new THREE.Vector3(0, 3, 0)), 0xffa030, 14, 8); this.game && (this.game.player.shake = 0.2); }
       this.fx.burst(e.pos.clone().add(new THREE.Vector3(0, 1, 0)), 0xffffff, 6, 5);
@@ -246,8 +264,20 @@ export class Enemies {
       let near = null, nd = Infinity;
       for (const p of players) { const d = p.pos.distanceTo(e.pos); if (d < nd) { nd = d; near = p; } }
       e.asleep = nd > C.sleepRange;
-      e.mesh.visible = e.alive && !e.asleep;
+      if (e.mesh) e.mesh.visible = e.alive && !e.asleep;
+      if (e.bar) e.bar.visible = false;
       if (e.asleep) continue; // 아무도 없으면 시간 정지
+      this._ensureMesh(e);
+      e.barT = Math.max(0, (e.barT || 0) - dt);
+      if (e.alive && e.dying <= 0 && e.barT > 0 && e.hp < e.maxHp) {
+        const b = this._bar(e), f = b.userData.fill, k = Math.max(0, e.hp / e.maxHp);
+        b.visible = true;
+        b.position.copy(e.pos).add(new THREE.Vector3(0, (e.T.static ? 9 : e.flying ? 1.4 : 2.2) * (e.T.static ? 1 : 1), 0));
+        if (this.game?.camera) b.quaternion.copy(this.game.camera.quaternion);
+        b.scale.setScalar(e.T.static ? 2.5 : 1 + e.maxHp * 0.03);
+        f.scale.x = k;
+        f.material.color.set(k > 0.5 ? 0x3ddc5a : k > 0.25 ? 0xffc233 : 0xff4040);
+      }
       if (!e.alive) {
         e.respawnTimer -= dt;
         if (e.T.noRespawn) continue;
@@ -348,6 +378,19 @@ export class Pickups {
     this.geo.center();
     this.mat = new THREE.MeshLambertMaterial({ color: 0xff4d6d, emissive: 0x661020 });
   }
+  spawnRingBag(pos) {
+    if (!this.bagGeo) {
+      this.bagGeo = new THREE.SphereGeometry(0.55, 12, 10); this.bagMat = new THREE.MeshLambertMaterial({ color: 0xc8904a });
+      this.bagTop = new THREE.TorusGeometry(0.35, 0.12, 8, 16); this.bagGold = new THREE.MeshLambertMaterial({ color: 0xffd21f, emissive: 0x7a5200 });
+    }
+    const m = new THREE.Group();
+    const bag = new THREE.Mesh(this.bagGeo, this.bagMat); bag.scale.set(1, 0.9, 1);
+    const ring = new THREE.Mesh(this.bagTop, this.bagGold); ring.position.y = 0.55; ring.rotation.x = Math.PI / 2;
+    m.add(bag, ring);
+    m.position.copy(pos);
+    this.scene.add(m);
+    this.items.push({ m, pos: pos.clone(), life: 25, vy: 8, bag: true });
+  }
   spawnHeart(pos) {
     const m = new THREE.Mesh(this.geo, this.mat);
     m.position.copy(pos);
@@ -366,7 +409,11 @@ export class Pickups {
       it.m.visible = it.life > 3 || Math.floor(time * 10) % 2 === 0;
       let taken = false;
       for (const p of players) {
-        if (p.alive && p.pos.distanceTo(it.pos) < 1.8) { p.collectHeart(); taken = true; break; }
+        if (p.alive && p.pos.distanceTo(it.pos) < 1.8) {
+          if (it.bag) { p.collectRing(CFG.items.ringBag); SFX.ringBag(); p.game.hud.toast(`💰 링 주머니! +${CFG.items.ringBag}`, 'gold'); }
+          else p.collectHeart();
+          taken = true; break;
+        }
       }
       if (taken || it.life <= 0) { this.scene.remove(it.m); this.items.splice(i, 1); }
     }

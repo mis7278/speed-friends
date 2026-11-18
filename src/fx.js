@@ -13,6 +13,14 @@ export class Effects {
     for (let i = 0; i < N; i++) this.parts.push({ alive: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), life: 0, max: 1 });
     scene.add(this.mesh);
     this.waves = [];
+    // 떨어지는 나뭇잎
+    const LN = 220;
+    this.leafParts = [];
+    this.leafMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.32, 0.22), new THREE.MeshLambertMaterial({ color: 0xffffff, side: THREE.DoubleSide }), LN);
+    this.leafMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(LN * 3), 3);
+    this.leafMesh.frustumCulled = false;
+    for (let i = 0; i < LN; i++) this.leafParts.push({ alive: false, pos: new THREE.Vector3(), vel: new THREE.Vector3(), rot: new THREE.Euler(), spin: 0, life: 0 });
+    scene.add(this.leafMesh);
     this._m = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._s = new THREE.Vector3(); this._c = new THREE.Color();
   }
 
@@ -39,6 +47,19 @@ export class Effects {
     this.waves.push({ m, t: 0, dur: 0.35, radius });
   }
 
+  leaves(pos, color = 0x5cc444, n = 10) {
+    let k = 0; const c = new THREE.Color();
+    for (let i = 0; i < this.leafParts.length && k < n; i++) {
+      const p = this.leafParts[i]; if (p.alive) continue;
+      p.alive = true; p.life = 3 + Math.random() * 2.5; p.phase = Math.random() * 6;
+      p.pos.copy(pos).add(new THREE.Vector3((Math.random() - 0.5) * 4, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 4));
+      p.vel.set((Math.random() - 0.5) * 3, Math.random() * 2, (Math.random() - 0.5) * 3);
+      p.rot.set(Math.random() * 6, Math.random() * 6, Math.random() * 6); p.spin = 2 + Math.random() * 4;
+      this.leafMesh.setColorAt(i, c.set(color).multiplyScalar(0.8 + Math.random() * 0.4));
+      k++;
+    }
+    this.leafMesh.instanceColor.needsUpdate = true;
+  }
   // 비행형 슈퍼: 회오리
   tornado(pos, dir, speed, owner) {
     const g = new THREE.Group();
@@ -79,6 +100,24 @@ export class Effects {
   }
 
   update(dt) {
+    {
+      const m = this._m, q = this._q, s = this._s;
+      for (let i = 0; i < this.leafParts.length; i++) {
+        const p = this.leafParts[i]; let sc = 0;
+        if (p.alive) {
+          p.life -= dt; if (p.life <= 0) p.alive = false;
+          p.vel.y = Math.max(p.vel.y - 6 * dt, -1.6);           // 천천히 하늘하늘
+          p.phase += dt * 3;
+          p.pos.x += (p.vel.x + Math.sin(p.phase) * 1.2) * dt; p.pos.z += (p.vel.z + Math.cos(p.phase * 0.8) * 1.0) * dt; p.pos.y += p.vel.y * dt;
+          p.rot.x += p.spin * dt; p.rot.z += p.spin * 0.7 * dt;
+          sc = p.alive ? Math.min(1, p.life) : 0;
+        }
+        m.compose(p.pos, q.setFromEuler(p.rot), s.set(sc, sc, sc));
+        this.leafMesh.setMatrixAt(i, m);
+      }
+      this.leafMesh.instanceMatrix.needsUpdate = true;
+      q.identity();
+    }
     for (let i = this.specials.length - 1; i >= 0; i--) {
       const s = this.specials[i];
       s.life -= dt;

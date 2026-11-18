@@ -38,7 +38,13 @@ export class CameraRig {
     }
 
     const want = new THREE.Vector3(), tgt = new THREE.Vector3(), upWant = WORLD_UP.clone();
-    if (inLoop) {
+    if (player.state === 'cannon' && player.cannon) { // 대포 조준: 대포 뒤에서
+      const c = player.cannon, m = c.mouth();
+      this.yaw = c.yaw;
+      tgt.copy(m).add(new THREE.Vector3(Math.sin(c.yaw) * 10, 4 + Math.sin(c.pitch) * 8, Math.cos(c.yaw) * 10));
+      want.copy(m).add(new THREE.Vector3(-Math.sin(c.yaw) * 9, 4.5, -Math.cos(c.yaw) * 9));
+      this.target.lerp(tgt, Math.min(1, dt * 8));
+    } else if (inLoop) {
       // 루프 안: 캐릭터 바로 뒤에서, 트랙과 함께 뒤집히며 따라감
       const L = player.loop, t = Math.min(1, Math.max(0, player.loopT));
       const T = L.tangentAt(t), N = L.centerAt(t).sub(L.pathAt(t)).normalize();
