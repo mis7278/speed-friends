@@ -218,7 +218,7 @@ export class Enemies {
     }
     return e.bar;
   }
-  hit(e, dmg, fromPos, knockPower = 10) {
+  hit(e, dmg, fromPos, knockPower = 10, launch = false) {
     if (!e.alive || e.dying > 0) return false;
     if (!e.T.static) dmg = Math.max(1, Math.round(dmg) - (e.T.armor || 0)); // 방어력만큼 덜 아픔
     e.barT = 4;
@@ -229,7 +229,9 @@ export class Enemies {
     if (dir.lengthSq() < 0.01) dir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
     dir.normalize();
     if (e.hp > 0) { // 단단한 몬스터: 밀려나기만
-      if (!e.T.static) e.pos.addScaledVector(dir, 1.5 + Math.min(2.5, dmg * 0.4));
+      if (!e.T.static && launch) { // 내려찍기: 뒤로 붕 날아갔다가 다시 덤빔
+        e.flyV = dir.clone().multiplyScalar(knockPower * (e.T.big ? 0.5 : 1)); e.flyV.y = 9 + knockPower * 0.25; e.flyT = 2.5; e.stunT = 0.6;
+      } else if (!e.T.static) e.pos.addScaledVector(dir, 1.5 + Math.min(2.5, dmg * 0.4));
       e.hitFlash = 0.3;
       if (e.T.static) { this.fx.burst(e.pos.clone().add(new THREE.Vector3(0, 3, 0)), 0xffa030, 14, 8); this.game && (this.game.player.shake = 0.2); }
       this.fx.burst(e.pos.clone().add(new THREE.Vector3(0, 1, 0)), 0xffffff, 6, 5);
@@ -312,6 +314,17 @@ export class Enemies {
         continue;
       }
       if (frozen) { e.mesh.position.copy(e.pos); continue; }
+      if (e.flyT > 0) { // 날아가는 중 (공격 안 함)
+        e.flyT -= dt;
+        e.flyV.y -= 30 * dt;
+        e.pos.addScaledVector(e.flyV, dt);
+        e.mesh.rotation.x += dt * 9;
+        const gy = this.world.groundAt(e.pos.x, e.pos.z, e.pos.y + 1) + (e.flying ? 2.2 : 0);
+        if (e.pos.y <= gy && e.flyV.y < 0) { e.pos.y = gy; e.flyT = 0; e.mesh.rotation.x = 0; this.fx.burst(e.pos.clone().add(new THREE.Vector3(0, 0.3, 0)), 0xd9c9a0, 6, 4); }
+        e.mesh.position.copy(e.pos);
+        continue;
+      }
+      if (e.stunT > 0) { e.stunT -= dt; e.mesh.position.copy(e.pos); e.mesh.rotation.z = Math.sin(time * 30) * 0.15 * e.stunT; continue; }
       const H = this.game?.hard;
       let tx, tz, speed = C.speed * e.T.speed * (H ? CFG.hard.enemySpeed : 1);
       if (nd < C.chaseRange * (H ? CFG.hard.chaseRange : 1) && near.alive) { tx = near.pos.x; tz = near.pos.z; }
@@ -336,7 +349,7 @@ export class Enemies {
       }
       const hd = Math.hypot(e.pos.x - e.home.x, e.pos.z - e.home.z);
       const LR = e.leash;
-      if (hd > LR) { e.pos.x = e.home.x + (e.pos.x - e.home.x) * LR / hd; e.pos.z = e.home.z + (e.pos.z - e.home.z) * LR / hd; }
+      if (hd > LR) { const k = Math.max(LR / hd, 1 - dt * 1.5); e.pos.x = e.home.x + (e.pos.x - e.home.x) * k; e.pos.z = e.home.z + (e.pos.z - e.home.z) * k; } // 멀리 날아갔으면 천천히 돌아옴
       const g = this.world.groundAt(e.pos.x, e.pos.z, e.pos.y + 1);
       if (e.flying) e.pos.y = Math.max(g, 0) + 2.2 + Math.sin(time * 2 + e.wanderT) * 0.4;
       else if (e.T.hops) { e.vy -= 30 * dt; e.pos.y += e.vy * dt; if (e.pos.y < g) { e.pos.y = g; e.vy = 0; } }

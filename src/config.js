@@ -21,7 +21,8 @@ export const CFG = {
     rollMinSpeed: 7,      // 이 속도 아래로 떨어지면 구르기 끝
     slamSpeed: 48,        // 내려찍기 낙하 속도
     slamRadius: 6.5,      // 내려찍기 범위
-    bounceVel: 13,        // 몬스터 밟고 튀어오르는 힘
+    bounceVel: 15,        // 몬스터 밟고 튀어오르는 힘 (약 2.8m)
+    bigBounce: 31,        // 맞히는 순간 점프를 맞춰 누르면 (약 12m)
     hurtInvuln: 1.8,      // 맞은 뒤 무적 시간(초)
     hurtKnockback: 15,    // 맞으면 뒤로 날아가는 힘
     hurtLift: 10,         // 맞으면 위로 튀는 힘
@@ -40,7 +41,7 @@ export const CFG = {
   gearUpTime: 0.35,        // 그 단계 최고 속도로 이만큼(초) 달리면 다음 단계로
   characters: {           // 캐릭터별 속도·점프 배율
     // gearCap: 1단·2단·3단 최고속도 배율 (스피드형 외에는 1·2단이 살짝 더 빠르고 가속이 빠름 → 3단 최고속도는 스피드형이 제일)
-    speed: { speed: 1.0, jump: 1.0, gearCap: [1, 1, 1], accel: 1, gearUp: 1 },
+    speed: { speed: 1.0, jump: 1.0, gearCap: [1, 1, 1.12], accel: 1.1, gearUp: 0.85 }, // 3단 최고속도 = 약 36 (가장 빠름)
     flyer: { speed: 0.95, jump: 1.05, gearCap: [1.12, 1.08, 0.95], accel: 1.25, gearUp: 0.7 },
     power: { speed: 0.93, jump: 0.95, gearCap: [1.1, 1.06, 0.93], accel: 1.22, gearUp: 0.7 },
     blink: { speed: 0.96, jump: 1.0, gearCap: [1.12, 1.08, 0.96], accel: 1.25, gearUp: 0.7 },
@@ -97,6 +98,8 @@ export const CFG = {
     gravityScale: 0.4,    // 루프 안에서 중력 비율 (클수록 더 빨라야 돌 수 있음)
     push: 5,              // 루프 안에서 앞 방향키를 누르고 있을 때 가속
     sideAccel: 16,        // 루프 안에서 옆으로 움직이는 힘
+    accelMul: 0.5,        // 트랙 위 달리기 가속 비율 (중력보다 약해서 느리면 못 올라감)
+    thickness: 0.6,       // 트랙 두께 (바깥쪽 면에도 부딪히고, 꼭대기 위에 설 수 있음)
   },
   water: { runSpeed: 20, swimDepth: -1.0, swimAt: 1.5, slow: 0.55,
     drag: 2.2, dragQuad: 0.03, swimAccel: 20, stroke: 9, burst: 26, buoyancy: 12, floatY: -1.0, groundDragQuad: 0.03 }, // 물: 깊이 swimAt(m) 넘으면 헤엄. 강한 힘은 잠깐 빠르지만 저항(drag)으로 금방 느려짐

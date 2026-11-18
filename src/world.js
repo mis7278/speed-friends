@@ -540,6 +540,15 @@ export class World {
         if (rh <= y + stepUp && rh > h) { h = rh; surface = 'ramp'; this.lastPlatform = null; }
       }
     }
+    // 루프 바깥쪽 꼭대기 (위에서 떨어지면 설 수 있음)
+    for (const L of this.loops) {
+      const rx = x - L.base.x, rz = z - L.base.z, along = rx * L.fwd.x + rz * L.fwd.z, Ro = L.R + CFG.loop.thickness;
+      if (Math.abs(along) > Ro * 0.75) continue;
+      const lat = rx * L.side.x + rz * L.side.z, t = (Math.PI - Math.asin(along / Ro)) / (Math.PI * 2);
+      if (Math.abs(lat - L.offset * (t - 0.5)) > L.width / 2) continue;
+      const top = L.base.y + L.R + Math.sqrt(Ro * Ro - along * along);
+      if (top <= y + stepUp && top > h) { h = top; surface = 'loopTop'; this.lastPlatform = null; }
+    }
     this.lastSurface = surface;
     return h;
   }

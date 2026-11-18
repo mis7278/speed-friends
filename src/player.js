@@ -84,7 +84,7 @@ export class Player {
   // ---------------------------------------------------------
   update(dt, input, camYaw) {
     const P = CFG.player;
-    for (const k of ['invuln', 'controlLock', 'padCooldown', 'dashTime', 'ringSfxCooldown', 'shake', 'hurtT', 'punchT', 'tornadoCD', 'ultCD', 'loopCD']) this[k] = Math.max(0, this[k] - dt);
+    for (const k of ['invuln', 'controlLock', 'padCooldown', 'dashTime', 'ringSfxCooldown', 'shake', 'hurtT', 'punchT', 'tornadoCD', 'ultCD', 'loopCD', 'bounceWindow', 'bounceBuffer']) this[k] = Math.max(0, this[k] - dt);
     this.flashV = Math.max(0, this.flashV - dt * 2);
 
     if (this.state === 'dead') {
@@ -111,8 +111,13 @@ export class Player {
 
     // ----- A 버튼 -----
     if (!locked && A.pressed) {
-      if (this.grounded && this.state !== 'loop') this.jump();
-      else if (this.state === 'air' && !this.slamming) this.airA(wish, hasMove);
+      if (this.state === 'loop') this.loopJump();
+      else if (this.grounded) this.jump();
+      else if (this.state === 'air' && !this.slamming) {
+        if (this.bounceWindow > 0) { this.vel.y = CFG.player.bigBounce; this.bounceWindow = 0; this.bigBounceFx(); } // 맞힌 직후 점프 = 높이 튕기기
+        else if (this.vel.y < 0 && this.ball && this.enemyBelow()) this.bounceBuffer = 0.22;              // 맞히기 직전 점프도 인정
+        else this.airA(wish, hasMove);
+      }
     }
     if (A.released) { this.holdValid = false; this.gliding = false; }
     if (this.holdValid && A.held) {
@@ -403,7 +408,7 @@ export class Player {
     const sup = this.superOn;
     const R = P.slamRadius * (sup ? CFG.super.slamRadiusMul : 1);
     let n = 0;
-    for (const e of this.game.enemies.inRadius(this.pos, R)) if (this.game.enemies.hit(e, sup ? 8 : 3, this.pos, sup ? 30 : 18)) { n++; this.onKill(); }
+    for (const e of this.game.enemies.inRadius(this.pos, R)) if (this.game.enemies.hit(e, sup ? 8 : 3, this.pos, sup ? 26 : 16, true)) { n++; this.onKill(); }
     this.smashAround(this.pos, sup ? R * 0.55 : R * 0.8);
     this.game.boss?.tryHit(this, this.pos, R, 1);
     if (n >= 3) this.stats.slamMulti = 1;
@@ -462,7 +467,10 @@ export class Player {
     this.vel.x = Math.sin(this.yaw) * this.s;
     this.vel.z = Math.cos(this.yaw) * this.s;
     this.moveAndGround(dt);
-    if (this.state === 'ground') this.checkLoopEntry();
+    if (this.state === 'ground' || this.state === 'air') {
+      if (this.loopContact(this._ox, this._oz)) return;
+      if (this.state === 'ground') { const gy = this.groundHere(this.pos.x, this.pos.z, this.pos.y + 0.5); if (Math.abs(gy - this.pos.y) < 1.2) this.pos.y = gy; }
+    }
   }
 
   // 움직이는 발판·회전판·컨베이어 위에서 같이 움직이기
@@ -481,6 +489,7 @@ export class Player {
     const world = this.game.world, P = CFG.player;
     this.carry(dt);
     const oldY = this.pos.y, ox = this.pos.x, oz = this.pos.z;
+    this._ox = ox; this._oz = oz;
     this.pos.x += this.vel.x * dt;
     this.pos.z += this.vel.z * dt;
     const v0x = this.vel.x, v0z = this.vel.z;
@@ -493,7 +502,6 @@ export class Player {
         if (hs > 0.5) this.yaw = Math.atan2(this.vel.x, this.vel.z);
       }
     }
-    if (this.loopBlocked()) { this.pos.x = ox; this.pos.z = oz; this.s *= 0.3; }
     let g = this.groundHere(this.pos.x, this.pos.z, oldY);
     // 절벽: 너무 가파르면 못 올라감 (옆으로 미끄러지기)
     const climb = (gg, x, z) => gg - oldY <= Math.max(0.9, Math.hypot(x - ox, z - oz) * P.maxClimb);
@@ -534,110 +542,131 @@ export class Player {
     return g;
   }
 
-  // ---------------- 360도 루프: 진짜 땅처럼 직접 달려서 돌기 ----------------
-  // 트랙 위에서의 위치 = (loopT: 트랙을 따라 얼마나 왔는지 0~1, loopLat: 트랙 가운데에서 옆으로 얼마나)
-  // 속도 = (loopVt: 트랙 방향 속도, loopVu: 옆 방향 속도). 방향키: 위=앞으로, 아래=브레이크, 좌우=옆으로.
-  checkLoopEntry() {
-    if (this.loopCD > 0) return;
-    const hv = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    for (const L of this.game.world.loops) {
-      const cos = hv.dot(L.fwd), sn = hv.dot(L.side);
-      // 입구 쪽
-      let rel = this.pos.clone().sub(L.entry), along = rel.dot(L.fwd), lat = rel.dot(L.side);
-      if (along > -0.6 && along < 1.2 && Math.abs(lat) < L.width / 2 && (cos > -0.2 || this.s < 2)) {
-        this.state = 'loop'; this.loop = L; this.loopT = Math.max(0.002, along / L.length); this.loopLat = lat;
-        this.loopVt = this.s * cos; this.loopVu = this.s * sn; return;
-      }
-      // 출구 쪽 (거꾸로 들어가기)
-      rel = this.pos.clone().sub(L.exit); along = rel.dot(L.fwd); lat = rel.dot(L.side);
-      if (along < 0.6 && along > -1.2 && Math.abs(lat) < L.width / 2 && cos < -0.2) {
-        this.state = 'loop'; this.loop = L; this.loopT = 1 - Math.max(0.002, -along / L.length); this.loopLat = lat;
-        this.loopVt = this.s * cos; this.loopVu = this.s * sn; return;
-      }
-    }
+  // ---------------- 360도 루프 = 동그랗게 말린 진짜 땅 ----------------
+  // 트랙은 두께가 있는 단단한 띠. 어느 방향에서 와도 부딪히고, 바닥 같은 곳에는 착지, 위쪽(벽·천장)은
+  // 속도가 충분할 때만 붙어서 달림 (원심력 v²/R 이 중력보다 커야 함). 위에서 떨어지면 바깥 꼭대기에도 설 수 있음.
+  // 트랙 위에서의 위치 = (loopT: 0~1 한 바퀴 중 어디, loopLat: 트랙 가운데에서 옆으로), 속도 = (loopVt: 트랙 방향, loopVu: 옆)
+  _loopGeo(L, x, y, z) {
+    const rx = x - L.base.x, rz = z - L.base.z;
+    const along = rx * L.fwd.x + rz * L.fwd.z, lat = rx * L.side.x + rz * L.side.z, up = y - (L.base.y + L.R);
+    const d = Math.hypot(along, up);
+    let a = Math.atan2(along, -up); if (a < 0) a += Math.PI * 2;
+    const t = a / (Math.PI * 2);
+    return { along, lat, up, d, a, t, dl: lat - L.offset * (t - 0.5) };
   }
-  // 루프 트랙 몸통에 부딪히는지 (루프는 그냥 지형: 안 돌고 싶으면 피해 가야 하는 장애물)
-  loopBlocked() {
-    const P = CFG.player, TAU = Math.PI * 2;
+  // 바깥(중심에서 멀어지는) 방향
+  _loopOut(L, g) { return new THREE.Vector3().addScaledVector(L.fwd, g.along / (g.d || 1)).setY(g.up / (g.d || 1)); }
+  _loopPush(L, g, newD) { this.pos.addScaledVector(this._loopOut(L, g), newD - g.d); }
+  attachLoop(L, t, lat) {
+    const T = L.tangentAt(t);
+    this.state = 'loop'; this.loop = L; this.standOn = null;
+    this.loopT = Math.min(0.999, Math.max(0.001, t)); this.loopLat = lat;
+    this.loopVt = this.vel.dot(T); this.loopVu = this.vel.dot(L.side) * 0.5;
+    this.gear = this.gearFor(Math.abs(this.loopVt) * 0.99);
+    this.slamming = false; this.superFlight = this.flying = this.gliding = false; this.dashTime = 0;
+    this.springChain = false; this.springLevel = 0; this.airActionUsed = false; this.holdValid = false;
+    L.pathAt(this.loopT, this.pos).addScaledVector(L.side, lat);
+  }
+  // 땅·공중에서 움직인 뒤 루프 트랙과 닿았는지 (ox, oz = 움직이기 전 위치)
+  loopContact(ox, oz) {
+    const W = CFG.loop, TH = W.thickness, gL = CFG.player.gravity * W.gravityScale, P = CFG.player;
     for (const L of this.game.world.loops) {
       const rx = this.pos.x - L.base.x, rz = this.pos.z - L.base.z;
-      const along = rx * L.fwd.x + rz * L.fwd.z;
-      if (Math.abs(along) > L.R + 0.8) continue;
-      const lat = rx * L.side.x + rz * L.side.z;
-      if (Math.abs(lat) > L.offset / 2 + L.width / 2 + 1) continue;
-      const a1 = Math.asin(Math.max(-1, Math.min(1, along / L.R)));
-      for (const a of [a1, a1 + TAU, Math.PI - a1]) {
-        if (a < 0 || a > TAU) continue;
-        const t = a / TAU, ty = L.base.y + L.R * (1 - Math.cos(a));
-        if (Math.abs(lat - L.offset * (t - 0.5)) > L.width / 2 + P.radius) continue;
-        if (ty > this.pos.y + 0.5 && ty < this.pos.y + P.height + 0.4) return true;
+      if (Math.abs(rx * L.fwd.x + rz * L.fwd.z) > L.R + TH + 2 || Math.abs(rx * L.side.x + rz * L.side.z) > L.offset / 2 + L.width / 2 + 2) continue;
+      const inRib = (g) => Math.abs(g.dl) < L.width / 2 + 0.25;
+      const F = this._loopGeo(L, this.pos.x, this.pos.y, this.pos.z);
+      const Hd = this._loopGeo(L, this.pos.x, this.pos.y + P.height, this.pos.z);
+      // 1) 발이 트랙 두께 안에 들어감 → 안쪽 면(달리는 면)이나 바깥쪽 면으로 밀어냄
+      if (inRib(F) && F.d > L.R - 0.05 && F.d < L.R + TH - 0.03) {
+        const vOut = this.vel.dot(this._loopOut(L, F));      // 바깥쪽으로 움직이는 중이면 안쪽 면에 닿은 것, 안쪽으로 움직이면 바깥 면
+        const fromInside = Math.abs(vOut) > 0.5 ? vOut > 0 : F.d - L.R <= L.R + TH - F.d;
+        if (fromInside) { // 안쪽 면
+          const ny = Math.cos(F.a), vt = this.vel.dot(L.tangentAt(F.t));
+          const stick = ny > 0.35 || (vt * vt / L.R + gL * ny > 0 && Math.abs(vt) > 6);
+          if (stick && this.loopCD <= 0) { this.attachLoop(L, F.t, F.dl); return true; }
+          this._loopPush(L, F, L.R - 0.04);                        // 벽·천장에 부딪힘
+          const out = this._loopOut(L, F), vn = this.vel.dot(out);
+          if (vn > 0) this.vel.addScaledVector(out, -vn);
+        } else {                            // 바깥쪽 면
+          this._loopPush(L, F, L.R + TH + 0.04);
+          const out = this._loopOut(L, F), vn = this.vel.dot(out);
+          if (vn < 0) this.vel.addScaledVector(out, -vn);
+          if (this.state === 'ground') this.s *= 0.5;
+        }
+        continue;
+      }
+      // 2) 발은 트랙 바깥(아래)인데 머리가 트랙을 뚫음 → 옆에서 트랙 몸통에 부딪힘
+      if (inRib(Hd) && F.d >= L.R + TH - 0.05 && Hd.d < L.R + TH) {
+        this.pos.x = ox; this.pos.z = oz;
+        if (this.state === 'air') { this.vel.x *= -0.2; this.vel.z *= -0.2; if (this.vel.y > 0 && Hd.up < -L.R * 0.3) this.vel.y = 0; }
+        else this.s *= 0.3;
+        continue;
+      }
+      // 3) 루프 안에서 점프해 머리가 안쪽 면(천장)에 닿음
+      if (inRib(Hd) && F.d < L.R - 0.05 && Hd.d > L.R - 0.05 && this.state === 'air') {
+        const vt = this.vel.dot(L.tangentAt(Hd.t)), ny = Math.cos(Hd.a);
+        if (this.loopCD <= 0 && vt * vt / L.R + gL * ny > 0 && Math.abs(vt) > 6) { this.attachLoop(L, Hd.t, Hd.dl); return true; } // 빠르면 천장에 붙어서 달림
+        this.pos.addScaledVector(this._loopOut(L, Hd), (L.R - 0.06) - Hd.d);
+        const out = this._loopOut(L, Hd), vn = this.vel.dot(out);
+        if (vn > 0) this.vel.addScaledVector(out, -vn);
       }
     }
     return false;
   }
-  checkLoopLanding() {
-    if (this.loopCD > 0 || this.vel.lengthSq() < 1) return false;
-    for (const L of this.game.world.loops) {
-      const C = L.base.clone(); C.y += L.R;
-      const rel = this.pos.clone().sub(C);
-      const along = rel.dot(L.fwd), up = rel.y;
-      const d = Math.hypot(along, up);
-      if (d < L.R - 0.4 || d > L.R + 1.2 || this.pos.y < L.base.y + 1.2) continue;
-      let a = Math.atan2(along, -up); if (a < 0) a += Math.PI * 2;
-      const t = a / (Math.PI * 2);
-      const pt = L.pathAt(t), lat = this.pos.clone().sub(pt).dot(L.side);
-      if (Math.abs(lat) > L.width / 2) continue;
-      const out = new THREE.Vector3().addScaledVector(L.fwd, along / d).setY(up / d);
-      if (this.vel.dot(out) < 0) continue;            // 바깥쪽(트랙 면)으로 움직일 때만
-      const T = L.tangentAt(t);
-      this.state = 'loop'; this.loop = L; this.loopT = t; this.loopLat = lat;
-      this.loopVt = this.vel.dot(T); this.loopVu = this.vel.dot(L.side);
-      this.slamming = false; this.superFlight = this.flying = this.gliding = false;
-      L.pathAt(t, this.pos).addScaledVector(L.side, lat);
-      return true;
-    }
-    return false;
+  // 트랙 위에서 점프: 그 자리 바닥이 향하는 쪽(루프 중심 쪽)으로
+  loopJump() {
+    const L = this.loop, t = Math.min(1, Math.max(0, this.loopT));
+    const n = L.centerAt(t).sub(L.pathAt(t)).normalize();
+    const v = L.tangentAt(t).multiplyScalar(this.loopVt).addScaledVector(L.side, this.loopVu);
+    const jv = CFG.player.jumpVel * CFG.characters[this.kind].jump * (this.superOn ? CFG.super.jumpMul : 1);
+    this.vel.copy(v).addScaledVector(n, jv);
+    this.pos.addScaledVector(n, 0.1);
+    this.loop = null; this.loopCD = 0.3; this.state = 'air'; this.standOn = null;
+    this.ball = true; this.rolling = false; this.airActionUsed = false; this.holdValid = true; this.holdTime = 0;
+    this.stats.jumps++;
+    SFX.jump();
   }
 
   updateLoop(dt, wish, hasMove) {
-    const L = this.loop, C = CFG.loop, m = this.mul();
+    const L = this.loop, C = CFG.loop, m = this.mul(), P = CFG.player;
     // 방향키는 보통 땅처럼 카메라 기준: 루프 진행 방향 쪽 = 앞으로
     const fwdIn = hasMove ? wish.x * L.fwd.x + wish.z * L.fwd.z : 0, sideIn = hasMove ? wish.x * L.side.x + wish.z * L.side.z : 0;
     const a = this.loopT * Math.PI * 2;
-    const g = CFG.player.gravity * C.gravityScale;
-    // 트랙 방향: 앞 키 = 가속(최고 속도까지), 아래 키 = 브레이크, 놓으면 조금씩 느려짐
-    if (fwdIn > 0.2) { if (this.loopVt < this.cap(this.gear)) this.loopVt += C.push * m * fwdIn * dt; }
-    else if (fwdIn < -0.2) { if (this.loopVt > 1) this.loopVt -= Math.min(this.loopVt, CFG.player.brake * 0.5 * m * dt); else if (this.loopVt > -this.cap(1)) this.loopVt -= C.push * m * -fwdIn * dt; }
-    else this.loopVt -= Math.sign(this.loopVt) * Math.min(Math.abs(this.loopVt), 2 * dt);
+    const g = P.gravity * C.gravityScale;
+    const dir = Math.sign(this.loopVt) || Math.sign(fwdIn) || 1, sp = Math.abs(this.loopVt);
+    this.gear = Math.max(1, Math.min(this.gear, this.gearFor(sp))); // 트랙 위에서는 단계가 올라가지 않음 (들어올 때 속도가 중요)
+    const acc = CFG.gears[this.gear - 1].accel * m * CFG.characters[this.kind].accel * C.accelMul;
+    // 땅과 같은 달리기: 가는 방향 키 = 가속(지금 단계 최고 속도까지), 반대 키 = 브레이크, 놓으면 천천히 느려짐
+    if (Math.abs(fwdIn) > 0.2 && Math.sign(fwdIn) === dir) { if (sp < this.cap(this.gear)) this.loopVt += dir * acc * Math.abs(fwdIn) * dt; }
+    else if (Math.abs(fwdIn) > 0.2) { this.loopVt -= dir * Math.min(sp + 1, P.brake * m * dt); }
+    else this.loopVt -= dir * Math.min(sp, (this.rolling ? 1 : 3) * dt);
     this.loopVt -= g * Math.sin(a) * dt;            // 올라갈 때 중력 때문에 느려지고, 내려올 때 빨라짐
-    if (this.loopVt > this.cap(3) * 1.6) this.loopVt -= CFG.player.overDecay * dt;
-    // 옆 방향: 좌우 키로 움직이고, 가만히 두면 천천히 멈춤
+    if (Math.abs(this.loopVt) > this.cap(3) * 1.6) this.loopVt -= Math.sign(this.loopVt) * P.overDecay * dt;
+    // 옆 방향
     this.loopVu += sideIn * C.sideAccel * m * dt;
     this.loopVu *= Math.max(0, 1 - 2.5 * dt);
     this.loopT += this.loopVt * dt / L.length;
     this.loopLat += this.loopVu * dt;
     this.s = Math.hypot(this.loopVt, this.loopVu);
-    if (this.rolling) { this.rollTime += dt; if (this.rollTime >= (this.rollLimit || 1.4) && fwdIn > 0.2) this.rolling = false; }
+    if (this.rolling) { this.rollTime += dt; if (this.rollTime >= (this.rollLimit || 1.4) && Math.abs(fwdIn) > 0.2) this.rolling = false; }
     this.ball = this.rolling;
     const surfVel = () => L.tangentAt(Math.min(1, Math.max(0, this.loopT))).multiplyScalar(this.loopVt).addScaledVector(L.side, this.loopVu);
     const leave = (toGround) => {
-      this.loop = null; this.loopCD = toGround ? 0 : 0.8; // 땅으로 나오면 바로 다시 탈 수 있음 (통과 방지)
+      this.loop = null; this.loopCD = toGround ? 0 : 0.6;
       const v = surfVel();
-      if (toGround) { this.state = 'ground'; this.s = Math.hypot(v.x, v.z); this.yaw = Math.atan2(v.x, v.z); this.slopeVy = 0; this.gear = this.gearFor(this.s); }
+      if (toGround) { this.state = 'ground'; this.s = Math.hypot(v.x, v.z); if (this.s > 0.3) this.yaw = Math.atan2(v.x, v.z); this.slopeVy = 0; this.gear = this.gearFor(this.s); }
       else { this.vel.copy(v); this.state = 'air'; this.airActionUsed = false; this.rolling = false; }
     };
-    // 트랙 옆으로 벗어나면 떨어짐
-    if (Math.abs(this.loopLat) > L.width / 2 + 0.2) {
-      L.pathAt(Math.min(1, Math.max(0, this.loopT)), this.pos).addScaledVector(L.side, this.loopLat);
-      leave(false);
-      return;
-    }
-    if (this.loopT >= 1) { L.pathAt(1, this.pos).addScaledVector(L.side, this.loopLat); this.stats.loops++; leave(true); return; }   // 한 바퀴 성공!
-    if (this.loopT <= 0) { L.pathAt(0, this.pos).addScaledVector(L.side, this.loopLat); leave(true); return; }                       // 뒤로 미끄러져 나옴
-    // 위쪽에서 너무 느리면 떨어짐 (원심력이 모자람)
-    const cosA = Math.cos(a);
-    if (cosA < 0.1 && this.loopVt * this.loopVt / L.R < -g * cosA + 0.3) {
+    // 트랙 옆 가장자리 밖으로 나가면 떨어짐
+    if (Math.abs(this.loopLat) > L.width / 2 + 0.2) { L.pathAt(Math.min(1, Math.max(0, this.loopT)), this.pos).addScaledVector(L.side, this.loopLat); leave(false); return; }
+    if (this.loopT >= 1) { L.pathAt(1, this.pos).addScaledVector(L.side, this.loopLat); if (this.loopVt > 0) this.stats.loops++; leave(true); return; }
+    if (this.loopT <= 0) { L.pathAt(0, this.pos).addScaledVector(L.side, this.loopLat); leave(true); return; }
+    // 원심력이 모자라면 트랙에서 떨어짐: v²/R + g·cos(a) < 0 (천장 쪽), 세워진 벽에서 너무 느려도 미끄러져 떨어짐
+    const ny = Math.cos(a), vt = this.loopVt;
+    if (vt * vt / L.R + g * ny < 0 || (ny < 0.3 && Math.abs(vt) < 4)) {
       L.pathAt(this.loopT, this.pos).addScaledVector(L.side, this.loopLat);
+      const n = L.centerAt(this.loopT).sub(L.pathAt(this.loopT)).normalize();
+      this.pos.addScaledVector(n, 0.12);
       leave(false);
       return;
     }
@@ -695,7 +724,6 @@ export class Player {
     const ox = this.pos.x, oz = this.pos.z, oldY = this.pos.y;
     this.pos.addScaledVector(this.vel, dt);
     if (world.collide(this.pos, P.radius, P.height, this.vel, oldY) && world.lastHitBox?.breakable) this.tryBreak(world.lastHitBox);
-    if (this.loopBlocked()) { this.pos.x = ox; this.pos.z = oz; }
     const bed = world.groundAt(this.pos.x, this.pos.z, this.pos.y + 0.5, 0.9, true);
     if (this.pos.y < bed) {
       if (bed - oldY > 1.2) { this.pos.x = ox; this.pos.z = oz; } // 물 속 절벽
@@ -755,7 +783,7 @@ export class Player {
       if (world.lastHitBox?.breakable) this.tryBreak(world.lastHitBox);
       if (world.lastHitTree && this.smashTree(world.lastHitTree)) { this.vel.x = v0x; this.vel.z = v0z; }
     }
-    if (this.loopBlocked()) { this.pos.x = ox; this.pos.z = oz; this.vel.x *= -0.25; this.vel.z *= -0.25; }
+    if (this.loopContact(ox, oz)) return;
     let g = world.groundAt(this.pos.x, this.pos.z, Math.max(oldY, this.pos.y), 0.9, true);
     let surf = world.lastSurface;
     if ((surf === 'water' || surf === 'shallow') && hs >= CFG.water.runSpeed && oldY >= -0.2 && !this.slamming) { g = Math.max(g, 0); surf = 'waterRun'; }
@@ -859,16 +887,14 @@ export class Player {
       const ec = e.pos.clone().add(new THREE.Vector3(0, e.flying ? 0 : 0.6, 0));
       const dh = Math.hypot(ec.x - center.x, ec.z - center.z), dy = Math.abs(ec.y - center.y);
       if (dh > e.radius + 0.7 || dy > 1.6) continue;
+      if (e.flyT > 0) continue;
       const stomp = this.state === 'air' && this.vel.y < -2 && center.y > ec.y + 0.4;
       if (this.attacking || stomp) {
-        if (this.game.enemies.hit(e, stomp && !this.attacking ? 2 : this.attackDamage(), this.pos, 12)) {
-          this.onKill();
-          if (this.state === 'air' && !this.slamming && !this.superFlight && !this.gliding) {
-            this.vel.y = CFG.player.bounceVel;
-            this.airActionUsed = false;
-            this.dashTime = 0;
-          }
-        } else if (!this.superOn && e.alive && e.dying <= 0 && !e.shielded) { // 단단한 몬스터: 튕겨남
+        const killed = this.game.enemies.hit(e, stomp && !this.attacking ? 2 : this.attackDamage(), this.pos, 12);
+        if (killed) this.onKill();
+        if (this.state === 'air' && !this.slamming && !this.superFlight && !this.gliding && center.y > ec.y - 0.2) {
+          this.enemyBounce(); // 위에서 떨어지며 맞히면 그 방향 그대로 위로 튕김 (타이밍 맞춰 점프하면 훨씬 높이)
+        } else if (!killed && !this.superOn && e.alive && e.dying <= 0 && !e.shielded) { // 단단한 몬스터: 튕겨남
           const away = center.clone().sub(ec).setY(0).normalize();
           this.vel.x = away.x * 10; this.vel.z = away.z * 10; this.vel.y = 9; this.state = 'air'; this.s = 0;
         }
@@ -881,6 +907,20 @@ export class Player {
     }
   }
 
+  // 몬스터를 밟고 튕기기 (2D 소닉처럼): 그냥 맞히면 살짝, 맞히는 순간 점프를 누르면 높이!
+  enemyBounce() {
+    const P = CFG.player;
+    const big = this.bounceBuffer > 0;
+    this.vel.y = big ? P.bigBounce : P.bounceVel;
+    this.bounceBuffer = 0; this.bounceWindow = big ? 0 : 0.2;
+    this.ball = true; this.airActionUsed = false; this.dashTime = 0; this.holdValid = false;
+    if (big) this.bigBounceFx();
+  }
+  bigBounceFx() {
+    SFX.spring();
+    this.game.fx.shockwave(this.pos, 3.5, 0xffe14d);
+    this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.5, 0)), 0xffe14d, 12, 6);
+  }
   // 지금 공격의 세기
   attackDamage() {
     const sp = this.state === 'air' ? Math.hypot(this.vel.x, this.vel.z) : Math.abs(this.s);
@@ -893,6 +933,13 @@ export class Player {
     else if (this.ball) d = 1 + sp / 10;      // 구르기: 빠를수록 세게 (초속 32 = 4, 50 = 6)
     if (this.superOn) d *= 2;
     return Math.round(d);
+  }
+  enemyBelow() {
+    for (const e of this.game.enemies.inRadius(this.pos, 4)) {
+      const dy = this.pos.y - e.pos.y;
+      if (dy > -0.5 && dy < 4.5 && Math.hypot(e.pos.x - this.pos.x, e.pos.z - this.pos.z) < e.radius + 1.6) return true;
+    }
+    return false;
   }
   canSmash() { return this.superOn || this.kind === 'power'; }
   // 나무·바위 부수기 (파워형은 언제나, 나머지는 슈퍼일 때)
