@@ -717,6 +717,7 @@ function boot() {
 
   async function startGame() {
     document.activeElement?.blur?.(); // 버튼에 남은 포커스 때문에 스페이스가 버튼을 누르지 않게
+    document.body.classList.add('playing'); // 세로로 들고 있으면 '가로로 돌려 주세요'
     initAudio();
     document.getElementById('start').classList.add('hidden');
     if (isTouch) {
@@ -770,6 +771,7 @@ function boot() {
   }
   if (LOAD) { // 저장한 곳에서 이어하기
     initAudio();
+    document.body.classList.add('playing');
     document.getElementById('start').classList.add('hidden');
     applySave(LOAD);
     W.stream(pl.pos, 0, true);
