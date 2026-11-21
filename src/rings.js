@@ -21,8 +21,13 @@ export class Rings {
     this.spots = spots;
     const geo = starGeometry();
     const mat = new THREE.MeshLambertMaterial({ color: 0xffd21f, emissive: 0x7a5200 });
-    this.mesh = new THREE.InstancedMesh(geo, mat, spots.length);
-    this.mesh.frustumCulled = false;
+    // 가까운 링만 그림 (맵 전체에 링이 아주 많아도 가벼움)
+    this.cap = Math.min(spots.length, 4000);
+    this.mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, this.cap));
+    this.mesh.frustumCulled = false; this.mesh.count = 0;
+    this.near = []; this.nearAt = new THREE.Vector2(1e9, 1e9); this.nearT = 0;
+    this.nearR = (matchMedia('(pointer: coarse)').matches ? 170 : 240);
+    this.off = [];   // 먹어서 꺼진 링 (다시 생길 때까지)
     this.active = new Array(spots.length).fill(true);
     this.timer = new Float32Array(spots.length);
     this.grid = new Map();
@@ -63,8 +68,22 @@ export class Rings {
     q.setFromEuler(this._e.set(0, time * 3, 0));
     const R2 = CFG.rings.pickupRadius ** 2;
     // 다시 생기기
-    for (let i = 0; i < this.spots.length; i++) {
-      if (!this.active[i]) { this.timer[i] -= dt; if (this.timer[i] <= 0) this.active[i] = true; }
+    for (let k = this.off.length - 1; k >= 0; k--) {
+      const i = this.off[k];
+      this.timer[i] -= dt; if (this.timer[i] <= 0) { this.active[i] = true; this.off[k] = this.off[this.off.length - 1]; this.off.pop(); }
+    }
+    // 가까운 링 목록 다시 만들기 (조금 움직였을 때만)
+    const focus = players[0]?.pos;
+    this.nearT -= dt;
+    if (focus && (this.nearT <= 0 && this.nearAt.distanceTo(new THREE.Vector2(focus.x, focus.z)) > 15)) {
+      this.nearT = 0.25; this.nearAt.set(focus.x, focus.z);
+      const R = this.nearR, gx = Math.floor(focus.x / 10), gz = Math.floor(focus.z / 10), n = Math.ceil(R / 10);
+      this.near.length = 0;
+      for (let a = -n; a <= n; a++) for (let b = -n; b <= n; b++) {
+        if (a * a + b * b > n * n + 2) continue;
+        const list = this.grid.get((gx + a) + ',' + (gz + b));
+        if (list) for (const i of list) { if (this.near.length < this.cap) this.near.push(i); }
+      }
     }
     // 줍기
     for (const pl of players) {
@@ -77,17 +96,19 @@ export class Rings {
         for (const i of list) {
           if (!this.active[i]) continue;
           if (this.spots[i].distanceToSquared(c) < R2) {
-            this.active[i] = false; this.timer[i] = CFG.rings.respawn;
+            this.active[i] = false; this.timer[i] = CFG.rings.respawn; this.off.push(i);
             pl.collectRing(1);
           }
         }
       }
     }
-    for (let i = 0; i < this.spots.length; i++) {
-      const sc = this.active[i] ? 1 : 0;
-      m.compose(this.spots[i], q, s.set(sc, sc, sc));
-      this.mesh.setMatrixAt(i, m);
+    let k = 0;
+    for (const i of this.near) {
+      if (!this.active[i]) continue;
+      m.compose(this.spots[i], q, s.set(1, 1, 1));
+      this.mesh.setMatrixAt(k++, m);
     }
+    this.mesh.count = k;
     this.mesh.instanceMatrix.needsUpdate = true;
 
     // 흩어진 링 움직이기

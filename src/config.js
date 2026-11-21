@@ -22,12 +22,14 @@ export const CFG = {
     slamSpeed: 48,        // 내려찍기 낙하 속도
     slamRadius: 6.5,      // 내려찍기 범위
     bounceVel: 15,        // 몬스터 밟고 튀어오르는 힘 (약 2.8m)
-    bigBounce: 31,        // 맞히는 순간 점프를 맞춰 누르면 (약 12m)
+    bigBounce: 31,
+    rollBounce: 10,       // 땅에서 굴러서 몬스터를 맞히면 튕겨 오르는 힘        // 맞히는 순간 점프를 맞춰 누르면 (약 12m)
     hurtInvuln: 1.8,      // 맞은 뒤 무적 시간(초)
     hurtKnockback: 15,    // 맞으면 뒤로 날아가는 힘
     hurtLift: 10,         // 맞으면 위로 튀는 힘
     maxHealth: 100,
     damage: 20,           // 몬스터에게 맞을 때 데미지(%)
+    ringLoss: 10,         // 맞으면 떨어지는 링 개수
     zeroRingExtra: 0.10,  // 링이 0개일 때 추가 데미지 비율 (10%)
     respawnDelay: 1.2,    // 쓰러진 후 부활까지(초)
     maxClimb: 1.2,        // 이보다 가파른 절벽은 못 올라감 (1m 갈 때 오를 수 있는 높이)
@@ -49,7 +51,7 @@ export const CFG = {
   // 비행형: 점프 연타할수록 헬리콥터처럼 더 빠르게 올라감, 안 누르면 천천히 내려오며 게이지 회복, 한 번에 최대 maxTime초
   flyer: { flapAdd: 6.5, maxRise: 26, gaugeMax: 100, flapCost: 4, regenPerSec: 14, maxTime: 20, fallSpeed: 3.2, gravityMul: 0.35, tornadoCooldown: 3, tornadoSpeed: 34 },
   power: { glideFall: 3.5, glideSpeed: 16, punchRange: 3.4 },
-  blink: { range: 30, energyRadius: 5.5, returnInvuln: 1.0, ultCooldown: 10, ultRange: 80, ultRingCost: 0.1 },
+  blink: { range: 30, energyRadius: 5.5, returnInvuln: 1.0, ultHold: 0.8, ultPullRange: 70, ultDamage: 14, ultCooldown: 10, ultRange: 80, ultRingCost: 0.1 },
   rings: {
     respawn: 30,          // 먹은 링이 다시 생기는 시간(초)
     scatterMax: 30,       // 맞았을 때 흩어지는 링 최대 표시 개수
@@ -90,7 +92,9 @@ export const CFG = {
     floatHop: 9,          // 스피드형 슈퍼 2단 점프: 살짝 더 뛰어오른 뒤
     floatGravity: 0.25,   //   천천히 내려옴 (중력 비율)
     floatMinFall: -4.5,   //   가장 빨리 떨어지는 속도
-    slamRadiusMul: 4,     // 슈퍼 내려찍기 범위 배율 (보통의 4배)
+    slamRadiusMul: 4,
+    freeTime: 300,        // 5개 대지를 모두 되찾은 뒤: 링 없이 변신하면 5분 뒤 풀림
+    freeCooldown: 60,     //   다시 변신까지 1분     // 슈퍼 내려찍기 범위 배율 (보통의 4배)
   },
   loop: {
     radius: 14,           // 루프 크기 (반지름)
@@ -99,7 +103,7 @@ export const CFG = {
     push: 5,              // 루프 안에서 앞 방향키를 누르고 있을 때 가속
     sideAccel: 16,        // 루프 안에서 옆으로 움직이는 힘
     accelMul: 0.5,        // 트랙 위 달리기 가속 비율 (중력보다 약해서 느리면 못 올라감)
-    thickness: 0.6,       // 트랙 두께 (바깥쪽 면에도 부딪히고, 꼭대기 위에 설 수 있음)
+    thickness: 1.2,       // 트랙 두께 (바깥쪽 면에도 부딪히고, 꼭대기 위에 설 수 있음)
   },
   water: { runSpeed: 20, swimDepth: -1.0, swimAt: 1.5, slow: 0.55,
     drag: 2.2, dragQuad: 0.03, swimAccel: 20, stroke: 9, burst: 26, buoyancy: 12, floatY: -1.0, groundDragQuad: 0.03 }, // 물: 깊이 swimAt(m) 넘으면 헤엄. 강한 힘은 잠깐 빠르지만 저항(drag)으로 금방 느려짐

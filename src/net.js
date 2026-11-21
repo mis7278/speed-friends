@@ -1,6 +1,7 @@
 // 같이 하기 (온라인): 방장이 방을 만들면 4글자 방 번호가 나오고, 친구가 그 번호로 들어옴 (최대 4명).
+// 대기실에서 서로 들어온 것을 확인하고 각자 캐릭터를 고른 뒤, 방장이 '시작'을 누르면 다 같이 시작.
+// 메인 퀘스트는 공통: 누가 깨든 모두 다음 퀘스트로.
 // 연결: PeerJS (무료 공개 중계 서버로 처음 만남만 연결 → 그다음은 기기끼리 직접 WebRTC).
-// 지금 단계: 서로의 캐릭터가 같은 맵에서 실시간으로 보임 (몬스터·링·퀘스트는 각자).
 import * as THREE from '../vendor/three.module.js';
 import { CharacterView } from './character.js';
 import { NAMES } from './names.js';
@@ -8,7 +9,8 @@ import { NAMES } from './names.js';
 const PREFIX = 'speedfriends-room-';
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const SEND_HZ = 15;
-const MAX_PLAYERS = 4;
+export const MAX_PLAYERS = 4;
+const KINDS = ['speed', 'flyer', 'power', 'blink'];
 
 function nameTag(text, color) {
   const c = document.createElement('canvas'); c.width = 256; c.height = 64;
@@ -21,21 +23,24 @@ function nameTag(text, color) {
   sp.scale.set(3.2, 0.8, 1); sp.renderOrder = 30;
   return sp;
 }
-const COLORS = ['#ffe14d', '#7df0ff', '#ff9ad5', '#9dff8a'];
+export const P_COLORS = ['#ffe14d', '#7df0ff', '#ff9ad5', '#9dff8a'];
 
 export class Net {
-  constructor(game) {
-    this.game = game;
+  // hooks: getKind(), isStarted(), getStage(), getQuest(), onStart(stage), onQuest(n), onChange()
+  constructor(game, hooks = {}) {
+    this.game = game; this.h = hooks;
     this.peer = null; this.conns = new Map(); this.host = false; this.code = null;
-    this.remotes = new Map();      // id -> { view, tag, target, yaw, state, last, kind, num }
-    this.sendT = 0; this.status = ''; this.onChange = null;
-    this.myNum = 1;
-    this.retry = 0;
+    this.remotes = new Map();      // 다른 친구 캐릭터 (게임 안)
+    this.members = [];             // 대기실 명단 [{id, num, kind, host}]
+    this.sendT = 0; this.status = '';
+    this.myNum = 1; this.retry = 0; this.stage = 0; this.started = false;
   }
   get Peer() { return window.Peer || window.peerjs?.Peer; }
   get active() { return !!this.peer && !this.peer.destroyed; }
-  get count() { return 1 + this.remotes.size; }
-  _set(status) { this.status = status; this.onChange?.(); }
+  get inRoom() { return !!this.code && (this.host ? this.active : this.conns.size > 0); }
+  get count() { return Math.max(1, this.members.length || 1 + this.remotes.size); }
+  _set(status) { this.status = status; this.h.onChange?.(); }
+  _changed() { this.h.onChange?.(); }
 
   // ---------- 방 만들기 / 들어가기 ----------
   createRoom(code = null) {
@@ -46,7 +51,7 @@ export class Net {
     this._set('방을 만드는 중…');
     const peer = new this.Peer(PREFIX + this.code);
     this.peer = peer;
-    peer.on('open', () => { this.retry = 0; this._save(); this._set(`방 번호 ${this.code} — 친구에게 알려 주세요!`); });
+    peer.on('open', () => { this.retry = 0; this._save(); this._roster(); this._set('친구에게 방 번호를 알려 주세요!'); });
     peer.on('connection', (conn) => {
       if (this.conns.size >= MAX_PLAYERS - 1) { conn.on('open', () => { conn.send({ t: 'full' }); setTimeout(() => conn.close(), 300); }); return; }
       this._wire(conn);
@@ -83,16 +88,15 @@ export class Net {
   }
   _connectHost() {
     if (!this.peer || this.peer.destroyed) return;
-    const conn = this.peer.connect(PREFIX + this.code, { reliable: true });
-    this._wire(conn);
+    this._wire(this.peer.connect(PREFIX + this.code, { reliable: true }));
   }
   leave(silent = false) {
     for (const c of this.conns.values()) { try { c.close(); } catch (e) {} }
     this.conns.clear();
     for (const id of [...this.remotes.keys()]) this._remove(id);
     if (this.peer) { try { this.peer.destroy(); } catch (e) {} }
-    this.peer = null;
-    if (!silent) { this.code = null; this.host = false; try { sessionStorage.removeItem('sf-net'); } catch (e) {} this._set(''); }
+    this.peer = null; this.members = [];
+    if (!silent) { this.code = null; this.host = false; this.started = false; try { sessionStorage.removeItem('sf-net'); } catch (e) {} this._set(''); }
   }
   _save() { try { sessionStorage.setItem('sf-net', JSON.stringify({ host: this.host, code: this.code })); } catch (e) {} }
   // 스테이지가 바뀌어 페이지가 다시 열리면 같은 방으로 자동 재연결
@@ -103,70 +107,124 @@ export class Net {
     return true;
   }
 
+  // ---------- 대기실 ----------
+  pick(kind) { // 내 캐릭터 고르기
+    if (!KINDS.includes(kind)) return;
+    if (this.host) this._roster();
+    else this._sendHost({ t: 'pick', kind });
+  }
+  // 방장: 다 같이 시작 (stage = 어느 대지)
+  startAll(stage) {
+    if (!this.host) return;
+    this.started = true; this.stage = stage;
+    this._roster();
+    this._broadcast({ t: 'start', stage });
+    this.h.onStart?.(stage);
+  }
+  // 퀘스트를 깼다고 알리기 (방장을 거쳐 모두에게)
+  sendQuest(n) {
+    if (!this.inRoom) return;
+    if (this.host) { this._broadcast({ t: 'quest', n }); this._roster(); }
+    else this._sendHost({ t: 'quest', n });
+  }
+  _sendHost(m) { for (const c of this.conns.values()) if (c.open) { try { c.send(m); } catch (e) {} } }
+
   // ---------- 메시지 ----------
   _wire(conn) {
     conn.on('open', () => {
       this.conns.set(conn.peer, conn);
       this.retry = 0;
-      if (!this.host) { this._save(); this._set(`방 ${this.code} 연결됨!`); }
-      conn.send({ t: 'hello', id: this.peer.id, kind: this.game.player?.kind });
-      if (this.host) { this._toast('👋 친구가 들어왔어요!'); this._roster(); }
+      if (!this.host) { this._save(); this._set(`방 ${this.code}에 들어왔어요!`); }
+      conn.send({ t: 'hello', id: this.peer.id, kind: this.h.getKind?.() });
+      if (this.host) { SFXping(); this._toast('👋 친구가 들어왔어요!'); }
     });
     conn.on('data', (m) => this._recv(conn, m));
     conn.on('close', () => {
       this.conns.delete(conn.peer);
-      if (this.host) { this._remove(conn.peer); this._broadcast({ t: 'bye', id: conn.peer }); this._toast('👋 친구가 나갔어요'); this._roster(); }
-      else { // 방장과 끊김 (스테이지 이동 등) → 다시 연결 시도
+      if (this.host) {
+        this._remove(conn.peer); this._broadcast({ t: 'bye', id: conn.peer });
+        this.kinds?.delete(conn.peer);
+        this._toast('👋 친구가 나갔어요'); this._roster();
+      } else { // 방장과 끊김 (스테이지 이동 등) → 다시 연결 시도
         for (const id of [...this.remotes.keys()]) this._remove(id);
+        this.members = [];
         if (this.code && this.peer && !this.peer.destroyed) { this._set('방장과 연결이 끊겼어요. 다시 연결하는 중…'); setTimeout(() => this._connectHost(), 2500); }
       }
-      this.onChange?.();
+      this._changed();
     });
     conn.on('error', () => {});
   }
   _broadcast(m, except = null) { for (const [id, c] of this.conns) if (id !== except && c.open) { try { c.send(m); } catch (e) {} } }
+  // 방장: 명단·진행 상황을 모두에게
   _roster() {
+    if (!this.host || !this.peer) return;
+    this.kinds = this.kinds || new Map();
     const ids = [this.peer.id, ...this.conns.keys()];
-    ids.forEach((id, i) => { const c = this.conns.get(id); if (c?.open) c.send({ t: 'num', num: i + 1 }); });
-    this.onChange?.();
+    this.members = ids.map((id, i) => ({ id, num: i + 1, kind: id === this.peer.id ? this.h.getKind?.() : (this.kinds.get(id) || 'speed'), host: i === 0 }));
+    const msg = { t: 'lobby', members: this.members, started: this.started || !!this.h.isStarted?.(), stage: this.h.getStage?.() ?? this.stage, quest: this.h.getQuest?.() ?? 0 };
+    ids.forEach((id, i) => { const c = this.conns.get(id); if (c?.open) c.send({ ...msg, you: i + 1 }); });
+    this._changed();
   }
   _recv(conn, m) {
     if (!m || typeof m !== 'object') return;
-    if (m.t === 'full') { this._set('방이 꽉 찼어요 (최대 4명)'); this.leave(); return; }
-    if (m.t === 'num') { this.myNum = m.num; this.onChange?.(); return; }
-    if (m.t === 'bye') { this._remove(m.id); this.onChange?.(); return; }
-    if (m.t === 's' || m.t === 'hello') {
-      if (typeof m.id !== 'string') return;
-      if (this.host && m.t === 's') this._broadcast(m, conn.peer); // 방장이 다른 친구들에게 전달
-      if (m.id === this.peer?.id) return;
-      if (m.t === 's') this._apply(m);
-      return;
+    switch (m.t) {
+      case 'full': this._set('방이 꽉 찼어요 (최대 4명)'); this.leave(); return;
+      case 'hello':
+        if (this.host && typeof m.id === 'string') { this.kinds = this.kinds || new Map(); if (KINDS.includes(m.kind)) this.kinds.set(conn.peer, m.kind); this._roster(); }
+        return;
+      case 'pick':
+        if (this.host && KINDS.includes(m.kind)) { this.kinds = this.kinds || new Map(); this.kinds.set(conn.peer, m.kind); this._roster(); }
+        return;
+      case 'lobby':
+        if (this.host || !Array.isArray(m.members)) return;
+        this.members = m.members.slice(0, MAX_PLAYERS).map((x) => ({ id: String(x.id), num: x.num | 0, kind: KINDS.includes(x.kind) ? x.kind : 'speed', host: !!x.host }));
+        this.myNum = m.you | 0 || this.myNum;
+        this.stage = m.stage | 0;
+        if (typeof m.quest === 'number') { this.lastQuest = m.quest; this.h.onQuest?.(m.quest); }
+        if (m.started && !this.h.isStarted?.()) { this.started = true; this.h.onStart?.(this.stage); } // 이미 시작한 방에 들어옴
+        this._changed();
+        return;
+      case 'start':
+        if (this.host) return;
+        this.started = true; this.stage = m.stage | 0;
+        this.h.onStart?.(this.stage);
+        return;
+      case 'quest':
+        if (typeof m.n !== 'number') return;
+        if (this.host) { this._broadcast(m, conn.peer); }
+        this.h.onQuest?.(m.n, true);
+        if (this.host) this._roster();
+        return;
+      case 'bye': this._remove(m.id); this._changed(); return;
+      case 's':
+        if (typeof m.id !== 'string') return;
+        if (this.host) this._broadcast(m, conn.peer); // 방장이 다른 친구들에게 전달
+        if (m.id !== this.peer?.id) this._apply(m);
+        return;
     }
-    if (m.t === 'toast' && typeof m.text === 'string') this._toast(m.text.slice(0, 60));
   }
   _toast(text) { this.game.hud?.toast(text); }
 
   // ---------- 다른 친구 캐릭터 ----------
   _apply(m) {
-    const kind = NAMES.characters[m.k] ? m.k : 'speed';
+    const kind = KINDS.includes(m.k) ? m.k : 'speed';
     let r = this.remotes.get(m.id);
-    if (r && r.kind !== kind) { this._remove(m.id); r = null; }
+    const num = Math.min(4, Math.max(1, m.n | 0 || 2));
+    if (r && (r.kind !== kind || r.num !== num)) { this._remove(m.id); r = null; }
     if (!r) {
       const view = new CharacterView(kind);
       this.game.scene.add(view.root);
-      const num = Math.min(4, Math.max(1, m.n | 0 || 2));
-      const tag = nameTag(`P${num} ${NAMES.characters[kind]}`, COLORS[(num - 1) % 4]);
+      const tag = nameTag(`P${num} ${NAMES.characters[kind]}`, P_COLORS[(num - 1) % 4]);
       this.game.scene.add(tag);
-      r = { view, tag, kind, target: new THREE.Vector3(m.p[0], m.p[1], m.p[2]), pos: new THREE.Vector3(m.p[0], m.p[1], m.p[2]), yaw: m.y, st: {}, last: 0, num };
+      r = { view, tag, kind, target: new THREE.Vector3(m.p[0], m.p[1], m.p[2]), pos: new THREE.Vector3(m.p[0], m.p[1], m.p[2]), yaw: m.y, yawT: m.y, st: {}, last: 0, num };
       this.remotes.set(m.id, r);
-      this.onChange?.();
+      this._changed();
     }
     r.target.set(+m.p[0] || 0, +m.p[1] || 0, +m.p[2] || 0);
     r.yawT = +m.y || 0;
     r.st = m.q || {};
     r.stage = m.g;
     r.last = performance.now();
-    if (m.n && m.n !== r.num) { r.num = m.n; }
   }
   _remove(id) {
     const r = this.remotes.get(id); if (!r) return;
@@ -190,7 +248,7 @@ export class Net {
     // 친구 캐릭터 부드럽게 움직이기
     const now = performance.now();
     for (const [id, r] of this.remotes) {
-      if (now - r.last > 8000) { this._remove(id); this.onChange?.(); continue; }
+      if (now - r.last > 8000) { this._remove(id); this._changed(); continue; }
       const same = r.stage === g.stageIdx;
       r.view.root.visible = same; r.tag.visible = same && !r.st.h;
       if (!same) continue;
@@ -205,3 +263,4 @@ export class Net {
     }
   }
 }
+function SFXping() {}

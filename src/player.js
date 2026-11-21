@@ -10,12 +10,30 @@ const UP = new THREE.Vector3(0, 1, 0);
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpM = new THREE.Matrix4();
 const angDiff = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
 
+// 가려졌을 때 보이는 실루엣: 캐릭터를 한 번 더 그리되, 앞에 다른 물체가 있는 부분에만 하늘색으로 (자기 몸끼리는 무시)
+let SIL_MAT = null;
+function makeSilhouette(root) {
+  if (!SIL_MAT) {
+    SIL_MAT = new THREE.MeshBasicMaterial({ color: 0x7fd8ff, transparent: true, opacity: 0.5, depthWrite: false, depthFunc: THREE.GreaterDepth, toneMapped: false, fog: false });
+    SIL_MAT.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', 'vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0); mvPosition.z += 0.8; gl_Position = projectionMatrix * mvPosition;');
+    };
+  }
+  const clone = root.clone(true);
+  const src = [], dst = [];
+  root.traverse((o) => src.push(o)); clone.traverse((o) => dst.push(o));
+  for (const o of dst) { if (o.isMesh) { o.material = SIL_MAT; o.castShadow = false; o.receiveShadow = false; o.renderOrder = 50; } }
+  return { root: clone, src, dst };
+}
+
 export class Player {
   constructor(game, kind = 'speed') {
     this.game = game;
     this.kind = kind;
     this.view = new CharacterView(kind);
     game.scene.add(this.view.root);
+    this.sil = makeSilhouette(this.view.root);
+    game.scene.add(this.sil.root);
     this.shadow = new THREE.Mesh(new THREE.CircleGeometry(0.8, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false }));
     this.shadow.rotation.x = -Math.PI / 2;
     game.scene.add(this.shadow);
@@ -65,8 +83,9 @@ export class Player {
   maxSpeed() { return this.cap(this.gear); }
 
   canTransform() {
-    if (this.game.hard) return !this.superOn && this.rings >= CFG.hard.superRingsNeeded; // 도전 모드: 씨앗 없이 변신
-    return !this.superOn && this.game.missions.crystals >= CFG.super.crystalsNeeded && this.rings >= CFG.super.ringsNeeded;
+    if (this.superOn) return false;
+    if (this.game.allClear) return (this.superCD || 0) <= 0;       // 5개 대지를 모두 되찾으면: 링 없이 변신 (쿨타임만)
+    return this.rings >= (this.game.hard ? CFG.hard.superRingsNeeded : CFG.super.ringsNeeded);
   }
 
   spawnAt(p, yaw = 0) {
@@ -122,12 +141,17 @@ export class Player {
     if (A.released) { this.holdValid = false; this.gliding = false; }
     if (this.holdValid && A.held) {
       this.holdTime += dt;
-      const ultReady = this.kind === 'blink' && this.superOn && this.ultCD <= 0;
-      if (this.canTransform() || ultReady) {
+      if (this.canTransform() || this.superOn) {
         if (this.holdTime > 0.2 && this.state === 'air') this.vel.y = Math.max(this.vel.y, -1.2);
-        if (this.holdTime >= CFG.super.holdTime) { this.holdValid = false; ultReady ? this.startUlt(wish, hasMove) : this.transform(); }
+        if (this.holdTime >= CFG.super.holdTime) { this.holdValid = false; this.superOn ? this.untransform() : this.transform(); }
       }
     }
+    // 순간이동형 슈퍼: C 꾹 → 블랙홀 필살기
+    const Cb0 = input.buttons.c;
+    if (Cb0 && Cb0.held && this.kind === 'blink' && this.superOn && this.ultCD <= 0 && !locked) {
+      this.cHold = (this.cHold || 0) + dt;
+      if (this.cHold >= CFG.blink.ultHold) { this.cHold = 0; this.startUlt(wish, hasMove); this.finishFrame(dt); return; }
+    } else this.cHold = 0;
 
     // ----- B 버튼 -----
     if (!locked && B.pressed) {
@@ -160,13 +184,19 @@ export class Player {
   }
 
   finishFrame(dt) {
+    this.superCD = Math.max(0, (this.superCD || 0) - dt);
     if (this.superOn) {
-      this.superDrain += dt * CFG.super.drainPerSec;
-      while (this.superDrain >= 1) { this.superDrain -= 1; this.rings = Math.max(0, this.rings - 1); }
-      if (this.rings <= 0) { this.superOn = false; this.superFlight = false; this.game.hud.toast(`${NAMES.superForm} 변신이 풀렸어요`); }
+      if (this.game.allClear) { // 링 없이 변신한 경우: 5분 뒤 풀림
+        this.superTime = (this.superTime || 0) + dt;
+        if (this.superTime >= CFG.super.freeTime) this.untransform();
+      } else {
+        this.superDrain += dt * CFG.super.drainPerSec;
+        while (this.superDrain >= 1) { this.superDrain -= 1; this.rings = Math.max(0, this.rings - 1); }
+        if (this.rings <= 0) this.untransform();
+      }
     }
     const ready = this.canTransform();
-    if (ready && !this.auraWasReady) { SFX.superReady(); this.game.hud.toast(`✨ ${NAMES.superForm} 변신 가능! 땅에서 점프를 1.5초 꾹!`, 'gold'); }
+    if (ready && !this.auraWasReady) { SFX.superReady(); this.game.hud.toast(`✨ ${NAMES.superForm} 변신 가능! 점프를 1.5초 꾹!`, 'gold'); }
     this.auraWasReady = ready;
     if (this.pos.y < -60) this.die();
     this.ringCheckPos.copy(this.pos).add(new THREE.Vector3(0, 0.9, 0));
@@ -319,40 +349,62 @@ export class Player {
       if (b.target) this.invuln = Math.max(this.invuln, B.returnInvuln);
     }
   }
+  // 순간이동형 슈퍼 필살기 (C 꾹): 공중으로 솟아올라 블랙홀 → 넓은 범위 몬스터를 빨아들임 → 쾅! 폭발하며 사방으로 날려버림
   startUlt(wish, hasMove) {
     const B = CFG.blink;
     const cost = Math.ceil(this.rings * B.ultRingCost);
-    this.rings = Math.max(0, this.rings - cost);
+    if (!this.game.allClear) this.rings = Math.max(0, this.rings - cost);
     this.ultCD = B.ultCooldown;
     const dir = hasMove ? wish.clone() : new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    this.ult = { t: 0, dir, y0: this.pos.y, fired: false };
-    this.game.freezeT = 2.2;
-    this.state = 'air'; this.vel.set(0, 0, 0); this.ball = false;
+    const c = this.pos.clone().addScaledVector(dir, 30);
+    c.y = this.game.world.groundAt(c.x, c.z, this.pos.y + 20) + 14;
+    this.ult = { t: 0, dir, y0: this.pos.y, center: c, fired: false, boom: false, pulled: [] };
+    this.game.freezeT = 2.1;
+    this.state = 'air'; this.vel.set(0, 0, 0); this.ball = false; this.rolling = false;
+    this.invuln = Math.max(this.invuln, 3);
     SFX.blackhole();
     this.game.hud.toast('🌑 블랙홀!', 'gold');
   }
   updateUlt(dt) {
-    const u = this.ult;
+    const u = this.ult, B = CFG.blink, en = this.game.enemies;
     u.t += dt;
-    this.pos.y = u.y0 + Math.min(1, u.t / 0.6) * 6;
-    if (!u.fired && u.t > 0.8) {
+    this.pos.y = u.y0 + Math.min(1, u.t / 0.6) * 8;
+    if (!u.fired && u.t > 0.6) {
       u.fired = true;
-      const center = this.pos.clone().addScaledVector(u.dir, 18);
-      this.game.fx.blackhole(center);
+      this.game.fx.blackhole(u.center.clone().setY(u.center.y - 4), 1.9, 8, 4);
       this.game.hud.flash('rgba(60,0,120,0.55)');
-      const cam = this.game.camera, frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
-      for (const e of this.game.enemies.inRadius(this.pos, CFG.blink.ultRange)) {
-        if (!frustum.containsPoint(e.pos)) continue;
-        if (this.game.enemies.hit(e, 9, center, 20)) this.onKill();
+      for (const e of en.list) {
+        if (!e.alive || e.dying > 0 || e.T.static) continue;
+        if (e.pos.distanceTo(u.center) < B.ultPullRange) { en._ensureMesh?.(e); u.pulled.push(e); e.flyT = 0; e.stunT = 0; }
       }
-      if (this.game.boss?.targetable && frustum.containsPoint(this.game.boss.pos)) this.game.boss.damage(2, this);
-      this.shake = 0.5;
+      this.shake = 0.4;
     }
-    if (u.t > 1.8) {
-      const back = this.pos.clone().addScaledVector(u.dir, -6);
-      this.pos.x = back.x; this.pos.z = back.z;
-      this.ult = null; this.state = 'air'; this.vel.set(0, 0, 0);
+    if (u.fired && !u.boom) { // 빨려 들어감
+      for (const e of u.pulled) {
+        if (!e.alive) continue;
+        const k = Math.min(1, dt * (1.5 + u.t));
+        e.pos.lerp(u.center, k);
+        if (e.mesh) { e.mesh.position.copy(e.pos); e.mesh.rotation.y += dt * 12; e.mesh.rotation.x += dt * 6; e.mesh.scale.setScalar(Math.max(0.5, 1 - (u.t - 0.6) * 0.3)); }
+      }
+      this.shake = Math.max(this.shake, 0.15);
     }
+    if (!u.boom && u.t > 2.0) { // 쾅!
+      u.boom = true;
+      this.game.fx.explosion(u.center, 3.5);
+      this.game.fx.shockwave(u.center.clone().setY(u.center.y - 8), B.ultPullRange * 0.6, 0xb070ff);
+      this.game.fx.burst(u.center, 0x6a2cff, 40, 22); this.game.fx.burst(u.center, 0xffffff, 30, 18);
+      this.game.hud.flash('rgba(200,140,255,0.7)');
+      SFX.explosion(); this.shake = 0.9;
+      for (const e of u.pulled) {
+        if (!e.alive) continue;
+        if (e.mesh) { e.mesh.scale.setScalar(1); e.mesh.rotation.set(0, 0, 0); }
+        if (en.hit(e, B.ultDamage, u.center.clone().add(new THREE.Vector3((Math.random() - 0.5) * 2, -2, (Math.random() - 0.5) * 2)), 26, true)) this.onKill();
+      }
+      for (const e of en.list) if (e.T.static && e.alive && e.pos.distanceTo(u.center) < B.ultPullRange) en.hit(e, 1, u.center);
+      if (this.game.boss?.targetable && this.game.boss.pos.distanceTo(u.center) < B.ultPullRange * 1.2) this.game.boss.damage(2, this);
+      this.smashAround(u.center.clone().setY(u.center.y - 9), 25);
+    }
+    if (u.t > 2.6) { this.ult = null; this.state = 'air'; this.vel.set(0, 2, 0); }
   }
 
   // ---------------- 스핀 / 내려찍기 ----------------
@@ -367,6 +419,14 @@ export class Player {
 
   updateCharge(dt, wish, hasMove) {
     const P = CFG.player;
+    if (this.knockV && this.knockV.lengthSq() > 0.05) { // 밀려나는 중
+      const ox = this.pos.x, oz = this.pos.z;
+      this.pos.addScaledVector(this.knockV, dt);
+      this.game.world.collide(this.pos, P.radius, P.height, this.knockV, this.pos.y);
+      const g = this.groundHere(this.pos.x, this.pos.z, this.pos.y + 0.5);
+      if (g - this.pos.y > 1.2) { this.pos.x = ox; this.pos.z = oz; } else this.pos.y = g;
+      this.knockV.multiplyScalar(Math.max(0, 1 - dt * 5));
+    }
     if (hasMove) {
       this.chargeDir.copy(wish);
       this.yaw = Math.atan2(wish.x, wish.z);
@@ -836,7 +896,7 @@ export class Player {
         this.state = 'air'; this.standOn = null;
         this.pos.y = sp.top;
         this.vel.y = sp.power * [1, 1.45, 1.9][this.springLevel - 1] * (this.superOn ? 1.2 : 1);
-        if (this.springLevel > 1) { this.game.hud.toast(this.springLevel === 3 ? '🔼🔼🔼 스프링 3단! 최고 높이!' : '🔼🔼 스프링 2단!'); this.game.fx.shockwave(sp.pos.clone().setY(sp.top), 2 + this.springLevel, 0xffe14d); }
+        if (this.springLevel > 1) this.game.fx.shockwave(sp.pos.clone().setY(sp.top), 2 + this.springLevel, 0xffe14d);
         this.vel.x *= 0.5; this.vel.z *= 0.5;
         this.ball = this.rolling = this.slamming = false;
         this.cancelAbilities();
@@ -890,10 +950,17 @@ export class Player {
       if (e.flyT > 0) continue;
       const stomp = this.state === 'air' && this.vel.y < -2 && center.y > ec.y + 0.4;
       if (this.attacking || stomp) {
-        const killed = this.game.enemies.hit(e, stomp && !this.attacking ? 2 : this.attackDamage(), this.pos, 12);
+        const ballHit = this.ball && !this.slamming && this.state !== 'charge';
+        // 공처럼 굴러서 맞히면 몬스터는 뒤로 밀려남 (안 죽었을 때)
+        const killed = this.game.enemies.hit(e, stomp && !this.attacking ? 2 : this.attackDamage(), this.pos, ballHit ? 11 : 12, ballHit);
         if (killed) this.onKill();
-        if (this.state === 'air' && !this.slamming && !this.superFlight && !this.gliding && center.y > ec.y - 0.2) {
-          this.enemyBounce(); // 위에서 떨어지며 맞히면 그 방향 그대로 위로 튕김 (타이밍 맞춰 점프하면 훨씬 높이)
+        if (this.state === 'air' && !this.slamming && !this.superFlight && !this.gliding && (ballHit || center.y > ec.y - 0.2)) {
+          this.enemyBounce(); // 회전하며 맞히면 그 방향 그대로 위로 튕김 (타이밍 맞춰 점프하면 훨씬 높이)
+        } else if (ballHit && this.state === 'ground') { // 땅에서 굴러서 맞혀도 톡 튕겨 오름
+          this.vel.set(Math.sin(this.yaw) * this.s * 0.6, CFG.player.rollBounce, Math.cos(this.yaw) * this.s * 0.6);
+          this.state = 'air'; this.standOn = null; this.ball = true; this.rolling = false; this.airActionUsed = false; this.bounceWindow = 0.2;
+        } else if (!killed && !this.superOn && e.alive && e.dying <= 0 && !e.shielded && this.state === 'charge') { // 스핀 충전 중: 살짝 밀리기만
+          this.knockV = center.clone().sub(ec).setY(0).normalize().multiplyScalar(6);
         } else if (!killed && !this.superOn && e.alive && e.dying <= 0 && !e.shielded) { // 단단한 몬스터: 튕겨남
           const away = center.clone().sub(ec).setY(0).normalize();
           this.vel.x = away.x * 10; this.vel.z = away.z * 10; this.vel.y = 9; this.state = 'air'; this.s = 0;
@@ -1038,10 +1105,17 @@ export class Player {
     const P = CFG.player;
     const dmg = P.damage * dmgMul * (this.rings === 0 ? 1 + P.zeroRingExtra : 1) * (this.game.hard ? CFG.hard.damage : 1);
     this.health -= dmg;
-    if (this.rings > 0) { this.game.rings.scatter(this.pos, this.rings); this.rings = 0; SFX.ringLoss(); }
+    if (this.rings > 0) { const lost = Math.min(this.rings, P.ringLoss); this.game.rings.scatter(this.pos, lost); this.rings -= lost; SFX.ringLoss(); }
     SFX.hurt();
     this.stats.streak = 0;
     this.invuln = P.hurtInvuln;
+    if (this.state === 'charge') { // 스핀 충전 중: 밀려나기만 하고 스핀은 계속
+      const away = this.pos.clone().sub(fromPos).setY(0); if (away.lengthSq() < 0.01) away.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+      this.knockV = away.normalize().multiplyScalar(P.hurtKnockback * 0.7);
+      this.shake = 0.25; this.hurtT = 0.3;
+      if (this.health <= 0) this.die();
+      return;
+    }
     if (this.state === 'loop') this.loop = null;
     const wasSwim = this.state === 'swim';
     const away = this.pos.clone().sub(fromPos).setY(0);
@@ -1103,9 +1177,17 @@ export class Player {
     SFX.heal();
   }
 
+  untransform() {
+    if (!this.superOn) return;
+    this.superOn = false; this.superFlight = false;
+    if (this.game.allClear) this.superCD = CFG.super.freeCooldown;
+    this.s = Math.min(this.s, this.cap(3)); this.gear = this.gearFor(this.s);
+    this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), 0xffffff, 14, 6);
+    this.game.hud.toast(`${NAMES.superForm} 변신이 풀렸어요`);
+  }
   transform() {
     this.superOn = true;
-    this.superDrain = 0;
+    this.superDrain = 0; this.superTime = 0;
     this.vel.y = Math.max(this.vel.y, 4);
     this.s *= CFG.super.speedMul; this.gear = this.gearFor(this.s);
     SFX.transform();
@@ -1128,6 +1210,10 @@ export class Player {
   updateView(dt) {
     const v = this.view;
     v.root.position.copy(this.pos);
+    // 땅 위를 걸을 때: 화면의 땅 모양에 맞춰 살짝 올려서 다리가 보이게 (언덕에서 묻혀 보이던 문제)
+    const onTerrain = (this.state === 'ground' || this.state === 'charge') && (this._surf === 'terrain' || this._surf === 'shallow' || this._surf == null) && !this.standOn;
+    this.vLift = (this.vLift || 0) + ((onTerrain ? this.game.world.visualLift(this.pos.x, this.pos.z) : 0) - (this.vLift || 0)) * Math.min(1, dt * 12);
+    v.root.position.y += this.vLift;
     if (this.state === 'loop' && this.loop) {
       const L = this.loop;
       const fwd = L.tangentAt(this.loopT).multiplyScalar(this.loopVt).addScaledVector(L.side, this.loopVu);
@@ -1150,6 +1236,10 @@ export class Player {
       superCharge: this.holdValid && this.canTransform() ? Math.min(1, this.holdTime / CFG.super.holdTime) : 0,
       blink: this.invuln > 0 && !this.superOn, time: this.game.time, flash: this.flashV * 0.6, hidden: this.hidden || !!this.firstPerson,
     });
+    // 실루엣 따라가기
+    const S = this.sil;
+    for (let i = 0; i < S.src.length; i++) { const a = S.src[i], b = S.dst[i]; b.position.copy(a.position); b.quaternion.copy(a.quaternion); b.scale.copy(a.scale); b.visible = a.visible; }
+    S.root.visible = v.root.visible && this.alive && !this.hidden && !this.firstPerson;
     const g = this.game.world.groundAt(this.pos.x, this.pos.z, this.pos.y + 0.1);
     const h = this.pos.y - g;
     this.shadow.visible = this.alive && this.state !== 'loop' && this.state !== 'swim' && h > 0.5;
@@ -1159,5 +1249,5 @@ export class Player {
     this.shadow.material.opacity = 0.3 * k;
   }
 
-  dispose() { this.game.scene.remove(this.view.root, this.shadow); }
+  dispose() { this.game.scene.remove(this.view.root, this.shadow, this.sil.root); }
 }

@@ -55,7 +55,7 @@
   .mission-row { letter-spacing: 0; }
   .mission-row.done { color: var(--gold); }
 
-  .quest { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); background: var(--panel); border: 2px solid rgba(255,255,255,.6); border-radius: 14px; padding: 6px 16px; text-align: center; max-width: 46vw; }
+  .quest { position: absolute; left: 50%; top: max(12px, calc(env(safe-area-inset-top) + 8px)); transform: translateX(-50%); background: var(--panel); border: 2px solid rgba(255,255,255,.6); border-radius: 14px; padding: 6px 16px; text-align: center; max-width: 46vw; }
   .quest.pop { animation: pop .5s; }
   .quest-title { font-size: 12px; color: #ffe14d; font-weight: 800; }
   .quest-text { font-size: 17px; font-weight: 800; }
@@ -68,7 +68,7 @@
   .toast.out { opacity: 0; transform: translateY(-20px); }
 
   .charge { position: absolute; left: 50%; bottom: 110px; transform: translateX(-50%); display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
-  .charge.on { opacity: 1; }
+  .charge.on { opacity: 0; } /* 스핀 충전 횟수는 보여주지 않음 (막 눌러보는 재미) */
   .charge-cell { width: 18px; height: 18px; border-radius: 4px; background: rgba(255,255,255,.25); border: 2px solid #fff; }
   .charge-cell.lit { background: #ffb02e; box-shadow: 0 0 8px #ffb02e; }
   .charge-cell.lit:nth-child(n+8) { background: #ff4d2e; box-shadow: 0 0 10px #ff4d2e; }
@@ -105,6 +105,10 @@
   .flash { position: absolute; inset: 0; opacity: 0; }
   .underwater { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .25s; background: radial-gradient(ellipse at 50% 30%, rgba(60,170,230,.28), rgba(10,60,120,.62)); }
   .underwater.on { opacity: 1; }
+  .bigmap { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,.6); z-index: 40; }
+  .bigmap.on { display: flex; }
+  .bigmap canvas { width: min(88vh, 92vw); height: min(88vh, 92vw); border-radius: 18px; border: 3px solid #fff; background: #2d4a30; }
+  .bigmap-hint { color: #fff; font-weight: 800; font-size: 13px; margin-top: 6px; }
   #coop-btn { font-family: inherit; font-size: 17px; font-weight: 800; color: #fff; background: rgba(40,120,255,.55); border: 2px solid #fff; border-radius: 14px; padding: 8px 18px; cursor: pointer; }
   #coop-panel { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.55); z-index: 60; }
   #coop-panel.on { display: flex; }
@@ -116,7 +120,18 @@
   .coop-row { display: flex; gap: 8px; justify-content: center; }
   #coop-code { width: 120px; font-family: inherit; font-size: 24px; font-weight: 900; text-align: center; letter-spacing: 6px; text-transform: uppercase; border-radius: 12px; border: 2px solid #fff; padding: 6px; }
   #coop-status { min-height: 22px; font-size: 16px; color: #ffe14d; }
-  #coop-list { font-size: 14px; opacity: .9; }
+  #coop-entry, #coop-lobby { display: flex; flex-direction: column; gap: 10px; }
+  .coop-roomcode { font-size: 16px; } .coop-roomcode b { font-size: 34px; letter-spacing: 8px; color: #ffe14d; display: block; }
+  #coop-members { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .coop-mem { background: rgba(0,0,0,.25); border-radius: 10px; padding: 7px 6px; font-size: 14px; border: 2px solid transparent; }
+  .coop-mem.me { border-color: #ffe14d; } .coop-mem.empty { opacity: .5; font-weight: 600; }
+  .coop-sub { font-size: 13px; opacity: .85; }
+  .coop-wrap { flex-wrap: wrap; }
+  #coop-chars button, #coop-stages button { font-size: 14px !important; padding: 6px 10px !important; }
+  #coop-chars button.sel, #coop-stages button.sel { background: #ffb02e !important; border-color: #fff !important; }
+  #coop-stages button:disabled { opacity: .4; cursor: default; }
+  #coop-wait { font-size: 15px; color: #cfe; }
+  .minimap { position: relative; z-index: 7; }
   #coop-badge { position: fixed; left: 50%; top: calc(86px + env(safe-area-inset-top)); transform: translateX(-50%); background: rgba(30,80,200,.7); color: #fff; font-weight: 900; font-size: 13px; padding: 3px 12px; border-radius: 12px; z-index: 6; display: none; pointer-events: none; }
   #coop-badge.on { display: block; }
 
@@ -212,7 +227,7 @@
   #ios-hint b { color: #ffe14d; } .ios-share { display: inline-block; border: 2px solid #ffe14d; border-radius: 4px; padding: 0 4px; font-size: 12px; }
   /* 아이폰 노치·둥근 모서리 피하기 */
   .hud-tl { left: max(14px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top)); }
-  .hud-tr { right: max(12px, env(safe-area-inset-right)); }
+  .hud-tr { right: max(12px, env(safe-area-inset-right)); top: max(12px, calc(env(safe-area-inset-top) + 8px)); }
   .speedo, body.touch .speedo { left: max(14px, env(safe-area-inset-left)); }
   .tbtn-a { right: max(28px, calc(env(safe-area-inset-right) + 10px)); bottom: max(34px, env(safe-area-inset-bottom)); }
   .tbtn-b { right: max(138px, calc(env(safe-area-inset-right) + 120px)); }
@@ -250,6 +265,7 @@
   <div id="title">스피드 프렌즈</div>
   <div id="start-mid"></div>
   <div class="modes" id="modes" style="display:none"><button data-mode="normal" class="sel">🌳 처음 모험</button><button data-mode="hard">⭐ 도전 모드 <small>(더 어려움 · 씨앗 없이 슈퍼)</small></button></div>
+  <div class="modes" id="stage-pick"></div>
   <div class="cards" id="cards"></div>
   <button id="start-btn">시작!</button>
   <button id="continue-btn" style="display:none">📂 이어하기</button>
@@ -263,22 +279,32 @@
     <b>B (스핀)</b> <kbd>마우스 왼쪽 클릭</kbd> — 방향키 누른 채 연타로 충전 · 공중에서: 내려찍기<br>
     <b>C</b> <kbd>C</kbd> 또는 <kbd>Shift</kbd> — 충전한 스핀 발사! · 달리다가 누르면 몸을 말고 굴러서 몬스터 공격<br>
     <b>물 속</b> A 위로 헤엄 (수면에서는 물 밖으로 점프) · B 잠수 · C 순간 돌진<br>
-    <b>아이템</b> <kbd>1</kbd> 씨앗 &nbsp; <kbd>2</kbd> 체력 회복 &nbsp; <b>변신</b> 시련을 해내 씨앗 3개 + 링 50개 → 땅에서 점프 1.5초 꾹!
+    <b>아이템</b> <kbd>1</kbd> 씨앗 &nbsp; <kbd>2</kbd> 체력 회복 &nbsp; <b>변신</b> 링 50개 → 점프 1.5초 꾹! (변신 중에 다시 꾹 = 풀기)
   </div>
   <div class="help" id="help-touch">
     <b>왼쪽 화면</b> 이동 &nbsp; <b>오른쪽 화면</b> 카메라 (두 손가락: 확대·축소) &nbsp; <b>A</b> 점프 / 기술 &nbsp; <b>B</b> 스핀 충전 / 내려찍기 &nbsp; <b>C</b> 스핀 발사 / 구르기<br>
-    <b>변신</b> 씨앗 3개 + 링 50개 → 점프를 1.5초 꾹!
+    <b>변신</b> 링 50개 → 점프를 1.5초 꾹! (변신 중에 다시 꾹 = 풀기)
   </div>
 </div>
 <div id="coop-panel">
   <div class="coop-box">
     <div class="coop-title">👥 같이 하기 <small>(최대 4명)</small></div>
-    <button id="coop-host" class="coop-big">🏠 방 만들기</button>
-    <div class="coop-or">또는 친구의 방 번호 넣기</div>
-    <div class="coop-row"><input id="coop-code" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters" spellcheck="false"><button id="coop-join">🚪 들어가기</button></div>
+    <div id="coop-entry">
+      <button id="coop-host" class="coop-big">🏠 방 만들기</button>
+      <div class="coop-or">또는 친구의 방 번호 넣기</div>
+      <div class="coop-row"><input id="coop-code" maxlength="4" placeholder="ABCD" autocomplete="off" autocapitalize="characters" spellcheck="false"><button id="coop-join">🚪 들어가기</button></div>
+    </div>
+    <div id="coop-lobby" style="display:none">
+      <div class="coop-roomcode">방 번호 <b id="coop-roomcode"></b></div>
+      <div id="coop-members"></div>
+      <div class="coop-sub">내 캐릭터</div>
+      <div class="coop-row" id="coop-chars"></div>
+      <div id="coop-stage-box"><div class="coop-sub">어느 대지에서 할까요?</div><div class="coop-row coop-wrap" id="coop-stages"></div></div>
+      <button id="coop-start" class="coop-big">▶ 다 같이 시작!</button>
+      <div id="coop-wait"></div>
+    </div>
     <div id="coop-status"></div>
-    <div id="coop-list"></div>
-    <div class="coop-row"><button id="coop-leave" style="display:none">나가기</button><button id="coop-close">닫기</button></div>
+    <div class="coop-row"><button id="coop-leave" style="display:none">방 나가기</button><button id="coop-close">닫기</button></div>
   </div>
 </div>
 <div id="coop-badge"></div>

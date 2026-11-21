@@ -482,6 +482,7 @@ export class World {
     this.treeGrid = new Map(); this.ringSpots = []; this.enemySpots = []; this.hazards = []; this.walls = [];
     this.spinners = []; this.smokeEmitters = []; this.searchlights = []; this.lights = []; this.cannons = [];
     this.questTargets = {}; this.secret = null;
+    this.landmarks = []; this.towerTops = [];
     this.houses = []; this.fadeBoxes = []; this.indoors = []; this.discoveries = []; this.chests = []; this.waterfalls = []; this.beacons = [];
     this.barrierUp = true; this.barrierSink = 0;
     this.occ = new Set();
@@ -557,6 +558,29 @@ export class World {
     for (const b of this._near(p.x, p.z)) {
       if (b.dead || b.kind === 'disc' || (skipFade && b.fade)) continue;
       if (p.x > b.min.x - 0.3 && p.x < b.max.x + 0.3 && p.z > b.min.z - 0.3 && p.z < b.max.z + 0.3 && p.y > b.min.y - 0.3 && p.y < b.max.y + 0.3) return true;
+    }
+    return false;
+  }
+  // 화면에 그려진 땅(격자 메시)이 실제 높이보다 얼마나 위에 있는지 + 경사 → 캐릭터가 땅에 묻혀 보이지 않게 그만큼 올려 그림
+  visualLift(x, z) {
+    const st = this.terrain.lods[0].step;
+    const x0 = Math.floor(x / st) * st, z0 = Math.floor(z / st) * st, fx = (x - x0) / st, fz = (z - z0) / st;
+    const h00 = terrainHeight(x0, z0), h10 = terrainHeight(x0 + st, z0), h01 = terrainHeight(x0, z0 + st), h11 = terrainHeight(x0 + st, z0 + st);
+    const mesh = (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
+    const h = terrainHeight(x, z);
+    const slope = Math.hypot(terrainHeight(x + 0.5, z) - terrainHeight(x - 0.5, z), terrainHeight(x, z + 0.5) - terrainHeight(x, z - 0.5));
+    return Math.min(3, Math.max(0, Math.max(h00, h10, h01, h11) > h ? mesh - h : 0) + Math.min(0.5, slope * 0.35));
+  }
+  // 카메라용: 이 점이 루프 트랙 안(두께 속)인지
+  loopSolidAt(p) {
+    const TH = CFG.loop.thickness + 0.3;
+    for (const L of this.loops) {
+      const rx = p.x - L.base.x, rz = p.z - L.base.z, along = rx * L.fwd.x + rz * L.fwd.z;
+      if (Math.abs(along) > L.R + TH + 1) continue;
+      const lat = rx * L.side.x + rz * L.side.z, up = p.y - (L.base.y + L.R), d = Math.hypot(along, up);
+      if (d < L.R - 0.4 || d > L.R + TH) continue;
+      let a = Math.atan2(along, -up); if (a < 0) a += Math.PI * 2;
+      if (Math.abs(lat - L.offset * (a / (Math.PI * 2) - 0.5)) < L.width / 2 + 0.4) return true;
     }
     return false;
   }
@@ -687,6 +711,7 @@ export class World {
     this._ponds();
     this._villages();
     this._discoveries();
+    this._landmarks();
     this._mainRoad();
     this._ringRoad();
     this._zoneMeadow();
@@ -941,39 +966,40 @@ export class World {
       return out.copy(fwd).multiplyScalar(Math.cos(a) * R * 2 * Math.PI).addScaledVector(side, offset).setY(Math.sin(a) * R * 2 * Math.PI).normalize();
     };
     loop.entry = loop.pathAt(0); loop.exit = loop.pathAt(1);
-    const N = 160, W = loop.width;
+    // 생김새: 동그랗게 말린 땅 조각 (안쪽 면 = 잔디, 옆면·바깥 = 흙, 바깥 꼭대기에도 잔디)
+    const N = 180, W = loop.width, TH = CFG.loop.thickness;
     const pos = [], col = [], idx = [];
-    const p = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+    const p = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), C1 = new THREE.Color(), C2 = new THREE.Color();
+    const gA = new THREE.Color(this.T.grassA), gB = new THREE.Color(this.T.grassB), dirt = new THREE.Color(0x8a5a32), dirt2 = new THREE.Color(0x6b4426), rock = new THREE.Color(0x7d6a55);
+    const ring = [];
     for (let i = 0; i <= N; i++) {
       const t = i / N;
       loop.pathAt(t, p); loop.centerAt(t, c);
-      n.copy(c).sub(p).normalize().multiplyScalar(-0.15);
-      const a = p.clone().addScaledVector(side, -W / 2).add(n), b = p.clone().addScaledVector(side, W / 2).add(n);
-      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
-      const stripe = Math.floor(i / 8) % 2 ? [0.15, 0.55, 1] : [1, 0.85, 0.3];
-      col.push(...stripe, ...stripe);
-      if (i < N) { const k = i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+      n.copy(c).sub(p).normalize();
+      ring.push({ il: p.clone().addScaledVector(side, -W / 2), ir: p.clone().addScaledVector(side, W / 2), ol: p.clone().addScaledVector(side, -W / 2).addScaledVector(n, -TH), or: p.clone().addScaledVector(side, W / 2).addScaledVector(n, -TH), ny: n.y, t });
     }
+    const strip = (ka, kb, colorFn) => {
+      const start = pos.length / 3;
+      ring.forEach((r, i) => {
+        const A = r[ka], B = r[kb];
+        pos.push(A.x, A.y, A.z, B.x, B.y, B.z);
+        colorFn(r, i, 0, C1); colorFn(r, i, 1, C2);
+        col.push(C1.r, C1.g, C1.b, C2.r, C2.g, C2.b);
+        if (i < N) { const k = start + i * 2; idx.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+      });
+    };
+    const noise = (i, s) => vnoise(i * 0.35 + s * 3.1, base.x * 0.01 + s);
+    strip('il', 'ir', (r, i, s, out) => out.copy(gA).lerp(gB, noise(i, s) * 0.8));                                   // 안쪽 (달리는 면)
+    strip('or', 'ol', (r, i, s, out) => (-r.ny > 0.45 ? out.copy(gA).lerp(gB, noise(i, s + 5)) : out.copy(dirt).lerp(rock, noise(i, s + 2)))); // 바깥 (꼭대기는 잔디)
+    strip('ol', 'il', (r, i, s, out) => out.copy(s ? gA : dirt).lerp(dirt2, s ? 0 : noise(i, 7) * 0.6));             // 왼쪽 옆면
+    strip('ir', 'or', (r, i, s, out) => out.copy(s ? dirt : gA).lerp(dirt2, s ? noise(i, 9) * 0.6 : 0));             // 오른쪽 옆면
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     geo.setIndex(idx); geo.computeVertexNormals();
-    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+    const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, emissive: 0x2e2417 })); // 그늘진 아랫면도 너무 까맣지 않게
     mesh.castShadow = true; mesh.receiveShadow = true;
     this.root.add(mesh);
-    for (const s of [-1, 1]) {
-      const pts = [];
-      for (let i = 0; i <= 80; i++) { loop.pathAt(i / 80, p); pts.push(p.clone().addScaledVector(side, s * W / 2)); }
-      const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 120, 0.2, 6), new THREE.MeshLambertMaterial({ color: 0xffffff }));
-      tube.castShadow = true;
-      this.root.add(tube);
-    }
-    // 받침 기둥
-    for (const s of [-1, 1]) {
-      const q = base.clone().addScaledVector(side, s * (offset / 2 + loop.width / 2 + 1.5));
-      this.put(BASE.box, 0x5d646e, q.x, base.y + R * 0.5, q.z, 0.8, R, 0.8);
-      this.put(BASE.box, 0xffc233, q.x, base.y + R, q.z, 1.2, 0.6, 1.2);
-    }
     this._occupy(base.x, base.z, R + 6);
     this.loops.push(loop);
     for (let i = 1; i < 10; i++) { const q = loop.pathAt(i / 10); q.lerp(loop.centerAt(i / 10), 0.09); this.ringSpots.push(q); }
@@ -2322,12 +2348,6 @@ export class World {
 
   _fieldFill() {
     const RR = CFG.world.barrierR - 40;
-    for (let i = 0; i < 420; i++) { // 들판 곳곳 링
-      const a = this.rand() * 6.28, r = 60 + Math.sqrt(this.rand()) * RR, x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (!this._free(x, z, 3)) continue;
-      if (this.rand() < 0.5) this._ringCircle(x, z, 4 + this.rand() * 3, 8);
-      else { const b = this.rand() * 6.28; this._ringLine(new THREE.Vector3(x, null, z), new THREE.Vector3(x + Math.cos(b) * 26, null, z + Math.sin(b) * 26), 8); }
-    }
     for (let i = 0; i < 110; i++) { // 스프링 + 위쪽 링
       const a = this.rand() * 6.28, r = 60 + Math.sqrt(this.rand()) * RR, x = Math.cos(a) * r, z = Math.sin(a) * r;
       if (!this._free(x, z, 3)) continue;
@@ -2343,8 +2363,10 @@ export class World {
     }
     // 들판의 하늘 탑 (엘리베이터·발판을 타고 높이 올라가는 링 코스)
     for (const [x, z] of [[-620, 520], [640, 380], [-700, -330], [260, 700], [1180, -420], [-1180, 420]]) this._tower(x, z, 70 + this.rand() * 30, false);
+    this._skyMore();
     this._skyRegion();
     this._exitPath();
+    this._pathRings();
   }
 
   // ---------- 하늘 코스 도우미 ----------
@@ -2377,6 +2399,7 @@ export class World {
       a += 1.0; n++;
     }
     this._plat(cx, gy + height + 0.5, cz, 9, 9, 0x8a8f99, 0xffc233);
+    this.towerTops.push(new THREE.Vector3(cx, gy + height + 0.5, cz));
     this._ringCircle(cx, cz, 3, 10, 1.4, gy + height + 0.5);
     this._addSpring(cx + 3, cz + 3, 36, gy + height + 0.5);
     this._addSpring(cx + Math.cos(0) * 9, cz, 26, gy + 0.3);
@@ -2443,6 +2466,191 @@ export class World {
     bridge(islands[4][0], islands[4][1], islands[4][2], islands[1][0], islands[1][1], islands[1][2]);
     // 하늘 링 아치
     for (let k = 0; k < 6; k++) { const a = k / 6 * 6.28; this._ringLine(new THREE.Vector3(S.x + Math.cos(a) * 90, 140 + k * 10, S.z - 100 + Math.sin(a) * 90), new THREE.Vector3(S.x + Math.cos(a + 0.5) * 90, 140 + k * 10, S.z - 100 + Math.sin(a + 0.5) * 90), 8, 0); }
+  }
+
+  // ---------- 하늘로 올라가는 구조물 더 많이: 하늘 탑 + 탑 꼭대기에서 이어지는 떠 있는 섬 ----------
+  _bridge(ax, ay, az, bx, by, bz) {
+    const d = Math.hypot(bx - ax, bz - az), n = Math.max(2, Math.round(d / 10));
+    for (let i = 1; i < n; i++) {
+      const t = i / n, x = ax + (bx - ax) * t, z = az + (bz - az) * t, y = ay + (by - ay) * t;
+      if (i % 5 === 3) this._mover({ x: x - 3.5, y, z }, { x: x + 3.5, y: y + 2.5, z }, 4.5, 0.6, 4.5, 3.5, 0x5a6068, 0xffc233);
+      else { this._plat(x, y, z, 4.6, 4.6); this._ringCircle(x, z, 0.1, 1, 1.4, y); }
+    }
+  }
+  _skyMore() {
+    let n = 0;
+    for (let i = 0; i < 400 && n < 16; i++) {
+      const a = this.rand() * 6.28, r = 250 + this.rand() * 1300, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (Math.hypot(x - SKY.x, z - SKY.z) < SKY.r + 60 || Math.hypot(x, z) > CFG.world.barrierR - 80) continue;
+      if (!this._free(x, z, 16)) continue;
+      if (this.towerTops.some((t) => Math.hypot(t.x - x, t.z - z) < 220)) continue;
+      const top = this._tower(x, z, 65 + this.rand() * 75, false);
+      // 탑 꼭대기에서 발판 다리로 이어진 하늘 섬 (섬에는 링과 높이 솟는 스프링)
+      const b = this.rand() * 6.28, dist = 45 + this.rand() * 30, ix = x + Math.cos(b) * dist, iz = z + Math.sin(b) * dist, iy = top + 8 + this.rand() * 25;
+      this._bridge(x, top + 1, z, ix, iy, iz);
+      this._skyIsland(ix, iy, iz, 12 + this.rand() * 8, null);
+      this._addSpring(ix + 4, iz + 4, 42, iy);
+      this._ringLine(new THREE.Vector3(ix + 4, iy + 10, iz + 4), new THREE.Vector3(ix + 4, iy + 45, iz + 4), 10, 0);
+      for (let k = 0; k < 3; k++) { const c = this.rand() * 6.28; this._ringArc(new THREE.Vector3(ix + Math.cos(c) * 30, iy, iz + Math.sin(c) * 30), new THREE.Vector3(Math.cos(c + 1.6), 0, Math.sin(c + 1.6)), 40, 14, 10, 0); }
+      n++;
+    }
+    // 들판 곳곳에 떠 있는 발판 사다리 (땅 스프링 → 공중 발판 3~5개 → 링)
+    for (let i = 0, m = 0; i < 600 && m < 40; i++) {
+      const a = this.rand() * 6.28, r = 120 + this.rand() * 1450, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (!this._free(x, z, 8) || terrainHeight(x, z) < 1) continue;
+      const gy = terrainHeight(x, z);
+      this._addSpring(x, z, 34, gy);
+      let y = gy + 12, px = x, pz = z;
+      const dir = this.rand() * 6.28, steps = 3 + Math.floor(this.rand() * 3);
+      for (let k = 0; k < steps; k++) {
+        px += Math.cos(dir) * 8; pz += Math.sin(dir) * 8; y += 5;
+        this._plat(px, y, pz, 4.5, 4.5);
+        this._ringLine(new THREE.Vector3(px, y + 1.4, pz), new THREE.Vector3(px + Math.cos(dir) * 6, y + 3, pz + Math.sin(dir) * 6), 3, 0);
+      }
+      this._addSpring(px, pz, 36, y);
+      this._ringLine(new THREE.Vector3(px, y + 10, pz), new THREE.Vector3(px, y + 34, pz), 7, 0);
+      this._occupy(x, z, 8);
+      m++;
+    }
+  }
+
+  // ---------- 랜드마크: 멀리서도 보이는 큰 구조물 (부서지지 않음) — "OO 쪽으로 와!" ----------
+  _landmarks() {
+    const lm0 = this.lm; this.lm = true;
+    const B = BASE;
+    const add = (name, icon, x, z, build) => {
+      for (let k = 0; k < 12 && !this._free(x, z, 10); k++) { x += 9; z += 6; }
+      const y = terrainHeight(x, z);
+      build(x, y, z);
+      this.landmarks.push({ name, icon, x, z });
+      this.discoveries.push({ name, pos: new THREE.Vector3(x, y, z), r: 40 });
+      this._ringCircle(x, z, 16, 18);
+      this._occupy(x, z, 18);
+    };
+    add('시계탑', '🕰', 489, 178, (x, y, z) => {
+      this.put(B.box, 0xd8c9a8, x, y + 22, z, 9, 44, 9); this.put(B.box, 0x8a6a48, x, y + 1, z, 11, 2, 11);
+      for (const [dx, dz, ry] of [[0, 4.6, 0], [0, -4.6, 0], [4.6, 0, Math.PI / 2], [-4.6, 0, Math.PI / 2]]) {
+        this.put(B.cyl, 0xffffff, x + dx, y + 36, z + dz, 6, 0.3, 6, ry, Math.PI / 2); this.put(B.box, 0x222222, x + dx * 1.02, y + 37, z + dz * 1.02, 0.4, 2.6, 0.4, ry);
+      }
+      this.put(B.cone4, 0x3f5fa8, x, y + 49, z, 12, 10, 12, Math.PI / 4); this.put(B.sph, 0xffd23a, x, y + 54.5, z, 1.4, 1.4, 1.4, 0, 0, 0, 'glow');
+      this._solid(x, y + 22, z, 9, 44, 9);
+    });
+    add('무지개 아치', '🌈', 130, 520, (x, y, z) => {
+      [0xff4040, 0xff9a30, 0xffe040, 0x50d060, 0x40a0ff, 0x6050e0, 0xb050e0].forEach((c, i) => {
+        const arc = new THREE.Mesh(new THREE.TorusGeometry(26 - i * 2.1, 1.05, 8, 48, Math.PI), new THREE.MeshBasicMaterial({ color: c, toneMapped: false }));
+        arc.position.set(x, y - 1, z); arc.rotation.y = 0.5; this.root.add(arc);
+      });
+    });
+    add('돌거인 석상', '🗿', -398, 334, (x, y, z) => {
+      const st = 0x9a958a;
+      for (const s of [-1, 1]) { this.put(B.box, st, x + s * 4, y + 7, z, 5, 14, 5); this.put(B.box, st, x + s * 10, y + 22, z, 4, 14, 4); }
+      this.put(B.box, st, x, y + 22, z, 14, 16, 8); this.put(B.box, st, x, y + 35, z, 9, 9, 8);
+      for (const s of [-1, 1]) this.put(B.box, 0x50e0ff, x + s * 2.2, y + 36, z + 4.05, 1.6, 1, 0.2, 0, 0, 0, 'glow');
+      this.put(B.box, 0x6d9a4a, x, y + 40, z, 9.5, 1.2, 8.5);
+      this._solid(x, y + 7, z, 13, 14, 5); this._solid(x, y + 22, z, 14, 16, 8);
+    });
+    add('관람차', '🎡', -489, -178, (x, y, z) => {
+      for (const s of [-1, 1]) { this.put(B.box, 0xd0d4da, x - 8, y + 15, z + s * 4, 1, 32, 1, 0, 0, 0.27); this.put(B.box, 0xd0d4da, x + 8, y + 15, z + s * 4, 1, 32, 1, 0, 0, -0.27); }
+      const wheel = new THREE.Group(), R = 18, mat = new THREE.MeshLambertMaterial({ color: 0xff5a8a }), spoke = new THREE.MeshLambertMaterial({ color: 0xffffff });
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(R, 0.5, 6, 48), mat); wheel.add(rim);
+      for (let k = 0; k < 12; k++) {
+        const a = k / 12 * Math.PI * 2, sp = new THREE.Mesh(B.box, spoke); sp.scale.set(0.3, R * 2, 0.3); sp.rotation.z = a; wheel.add(sp);
+        const cab = new THREE.Mesh(B.box, new THREE.MeshLambertMaterial({ color: [0xffd23a, 0x40a0ff, 0x50d060, 0xff6a3a][k % 4] })); cab.scale.set(2.4, 2.4, 2.4); cab.position.set(Math.cos(a) * R, Math.sin(a) * R, 0); wheel.add(cab);
+      }
+      wheel.position.set(x, y + 31, z); wheel.rotation.y = Math.PI / 2; this.root.add(wheel);
+      this.spinners.push({ mesh: wheel, axis: 'z', speed: 0.15 });
+    });
+    add('작은 성', '🏰', -90, -540, (x, y, z) => {
+      const st = 0xb8b0a0, H = 12;
+      for (const [dx, dz] of [[-14, -14], [14, -14], [-14, 14], [14, 14]]) { this.put(B.cyl, st, x + dx, y + 10, z + dz, 7, 20, 7); this.put(B.cone, 0xc0452c, x + dx, y + 23, z + dz, 8, 7, 8); this._solid(x + dx, y + 10, z + dz, 6, 20, 6); }
+      for (const [cx, cz, sx, sz] of [[0, -14, 22, 2], [-14, 0, 2, 22], [14, 0, 2, 22]]) { this.put(B.box, st, x + cx, y + H / 2, z + cz, sx, H, sz); this._solid(x + cx, y + H / 2, z + cz, sx, H, sz); }
+      for (const s of [-1, 1]) { this.put(B.box, st, x + s * 8, y + H / 2, z + 14, 8, H, 2); this._solid(x + s * 8, y + H / 2, z + 14, 8, H, 2); }
+      this.put(B.box, st, x, y + 18, z, 12, 24, 12); this.put(B.cone4, 0x3f5fa8, x, y + 34, z, 14, 9, 14, Math.PI / 4); this._solid(x, y + 18, z, 12, 24, 12);
+      this.put(B.box, 0xd83a2a, x + 0.7, y + 41, z, 1.4, 1, 0.1); this.put(B.cyl6, 0x3a3a3a, x, y + 40, z, 0.2, 4, 0.2);
+    });
+    add('물탱크 탑', '🛢', 398, -334, (x, y, z) => {
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) this.put(B.box, 0x8a6a48, x + sx * 4, y + 13, z + sz * 4, 0.8, 26, 0.8);
+      this.put(B.cyl, 0x4a8ad8, x, y + 31, z, 12, 10, 12); this.put(B.cone, 0x2f5fa0, x, y + 38, z, 13, 4, 13);
+      this._solid(x, y + 31, z, 10, 10, 10); this._addSpring(x, z, 48, y);
+    });
+    add('빨간 등대', '🗼', 1150, 0, (x, y, z) => {
+      for (let i = 0; i < 6; i++) this.put(B.cyl, i % 2 ? 0xffffff : 0xd83a2a, x, y + 4 + i * 7, z, 8 - i * 0.6, 7, 8 - i * 0.6);
+      this.put(B.cyl, 0xfff0a0, x, y + 46, z, 4.4, 4, 4.4, 0, 0, 0, 'glow'); this.put(B.cone, 0x333333, x, y + 50, z, 6, 4, 6);
+      this._solid(x, y + 22, z, 7, 44, 7);
+    });
+    add('번개 송신탑', '📡', 813, 813, (x, y, z) => {
+      for (let i = 0; i < 7; i++) { const w = 12 - i * 1.5, yy = y + i * 10; for (const sx of [-1, 1]) for (const sz of [-1, 1]) this.put(B.box, 0xd84a3a, x + sx * w / 2, yy + 5, z + sz * w / 2, 0.6, 10.5, 0.6, 0, sz * 0.08, -sx * 0.08); this.put(B.box, 0xeeeeee, x, yy + 10, z, w, 0.5, w); }
+      this.put(B.sph, 0xff2010, x, y + 73, z, 2, 2, 2, 0, 0, 0, 'glow');
+      this._solid(x, y + 30, z, 8, 60, 8);
+    });
+    add('열기구', '🎈', 20, 1150, (x, y, z) => {
+      const g = new THREE.Group(), env = new THREE.Mesh(new THREE.SphereGeometry(10, 16, 12), new THREE.MeshLambertMaterial({ color: 0xff7a3a }));
+      env.scale.y = 1.2; g.add(env);
+      const band = new THREE.Mesh(new THREE.TorusGeometry(10.1, 0.6, 6, 32), new THREE.MeshLambertMaterial({ color: 0xffe040 })); band.rotation.x = Math.PI / 2; g.add(band);
+      const bask = new THREE.Mesh(BASE.box, new THREE.MeshLambertMaterial({ color: 0x8a5a2b })); bask.scale.set(4, 2.5, 4); bask.position.y = -17; g.add(bask);
+      g.position.set(x, y + 55, z); this.root.add(g);
+      this.spinners.push({ mesh: g, axis: 'y', speed: 0.12 });
+      this._plat(x, y + 37, z, 4, 4, 0x8a5a2b, 0xa8744a);
+      this._ringLine(new THREE.Vector3(x + 6, y + 8, z), new THREE.Vector3(x + 2, y + 34, z), 10, 0);
+      this._addSpring(x + 6, z, 46, y);
+    });
+    add('피라미드', '🔺', -813, 813, (x, y, z) => {
+      for (let i = 0; i < 8; i++) { const w = 44 - i * 5.5; this.put(B.box, i % 2 ? 0xe0c080 : 0xd4b06a, x, y + 2.25 + i * 4.5, z, w, 4.5, w); this._solid(x, y + 2.25 + i * 4.5, z, w, 4.5, w); }
+      this.put(B.box, 0xffd23a, x, y + 37, z, 3, 2, 3, 0, 0, 0, 'glow');
+    });
+    add('거대 해바라기', '🌻', -1150, 0, (x, y, z) => {
+      this.put(B.cyl, 0x4f9a3a, x, y + 15, z, 2, 30, 2);
+      for (const s of [-1, 1]) this.put(B.sph, 0x5cb04a, x + s * 4, y + 12, z, 8, 2, 4, 0, 0, s * 0.4);
+      this.put(B.cyl, 0x6b4a2e, x, y + 31, z + 1.2, 12, 1.2, 12, 0, Math.PI / 2 - 0.25);
+      for (let k = 0; k < 14; k++) { const a = k / 14 * Math.PI * 2; this.put(B.sph, 0xffd23a, x + Math.cos(a) * 9, y + 31 + Math.sin(a) * 9 * 0.97, z + 0.6, 5, 2.6, 1, 0, 0, a); }
+      this._solid(x, y + 15, z, 2, 30, 2);
+    });
+    add('보라 수정탑', '💎', -813, -813, (x, y, z) => {
+      this.put(B.cone4, 0xb070ff, x, y + 22, z, 9, 44, 9, 0, 0, 0, 'glow');
+      for (let k = 0; k < 5; k++) { const a = k / 5 * 6.28; this.put(B.cone4, 0x8a50e0, x + Math.cos(a) * 8, y + 7, z + Math.sin(a) * 8, 4, 14, 4, a, 0.25 * Math.cos(a), 0.25 * Math.sin(a), 'glow'); }
+      this._solid(x, y + 15, z, 6, 30, 6);
+    });
+    add('거북 바위', '🐢', 813, -813, (x, y, z) => {
+      const yy = Math.max(y, 0);
+      this.put(B.hemi, 0x6a8a4a, x, yy - 1, z, 36, 18, 30); this.put(B.sph, 0x8aa86a, x + 20, yy + 3, z, 9, 7, 8);
+      for (const [dx, dz] of [[-10, 13], [10, 13], [-10, -13], [10, -13]]) this.put(B.sph, 0x8aa86a, x + dx, yy, z + dz, 7, 4, 7);
+      this._register({ kind: 'disc', center: new THREE.Vector3(x, 0, z), radius: 13, top: yy + 8, min: new THREE.Vector3(x - 14, yy - 2, z - 14), max: new THREE.Vector3(x + 14, yy + 8, z + 14) });
+      this._ringCircle(x, z, 6, 10, 1.3, yy + 8);
+    });
+    this.lm = lm0;
+  }
+
+  // ---------- 길 모양 링: 마을·발견 장소·랜드마크·탑·퀘스트 장소를 잇는 오솔길을 따라 ----------
+  _pathRings() {
+    const nodes = [];
+    const push = (x, z) => { if (Math.hypot(x, z) < CFG.world.barrierR - 40) nodes.push({ x, z }); };
+    for (const d of this.discoveries) push(d.pos.x, d.pos.z);
+    for (const t of this.towerTops) push(t.x, t.z);
+    for (const k in SITES) push(SITES[k].x, SITES[k].z);
+    for (const P of PONDS) push(P.x + P.r * 1.3, P.z);
+    push(0, 40);
+    const edges = new Set(), solid = new THREE.Vector3();
+    nodes.forEach((a, i) => {
+      const near = nodes.map((b, j) => ({ j, d: Math.hypot(a.x - b.x, a.z - b.z) })).filter((o) => o.j !== i && o.d > 30 && o.d < 650).sort((p, q) => p.d - q.d).slice(0, 3);
+      for (const o of near) edges.add(i < o.j ? i + ',' + o.j : o.j + ',' + i);
+    });
+    const step = 2.8, on = 16, off = 5;
+    for (const e of edges) {
+      const [i, j] = e.split(',').map(Number), A = nodes[i], Bn = nodes[j];
+      const L = Math.hypot(Bn.x - A.x, Bn.z - A.z), nx = -(Bn.z - A.z) / L, nz = (Bn.x - A.x) / L;
+      const bend = (this.rand() - 0.5) * L * 0.25, wav = this.rand() * 6;
+      const n = Math.floor(L / step);
+      for (let k = 3; k < n - 3; k++) {
+        if (k % (on + off) >= on) continue;
+        const t = k / n, side = bend * Math.sin(Math.PI * t) + Math.sin(t * 9 + wav) * 4;
+        const x = A.x + (Bn.x - A.x) * t + nx * side, z = A.z + (Bn.z - A.z) * t + nz * side;
+        const h = terrainHeight(x, z);
+        if (h < 0.2 || Math.hypot(x, z) > CFG.world.barrierR - 30) continue;
+        const y = this.groundAt(x, z, h + 3) + 1.2;
+        if (this.solidAt(solid.set(x, y, z)) || this.loopSolidAt(solid)) continue;
+        this.ringSpots.push(new THREE.Vector3(x, y, z));
+      }
+    }
   }
 
   // ---------- 다음 대지로 가는 길 (북쪽, 점점 눈이 덮임) ----------

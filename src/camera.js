@@ -78,7 +78,7 @@ export class CameraRig {
         const p = new THREE.Vector3();
         for (let d = 1.2; d < len; d += 0.5) {
           p.copy(this.target).addScaledVector(dir, d);
-          if (world.solidAt(p, true)) { want.copy(this.target).addScaledVector(dir, Math.max(1, d - 0.7)); break; }
+          if (world.solidAt(p, true) || world.loopSolidAt(p)) { want.copy(this.target).addScaledVector(dir, Math.max(1, d - 0.7)); break; }
         }
       }
       cam.position.copy(want);

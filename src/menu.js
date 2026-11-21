@@ -36,11 +36,19 @@ export class PauseMenu {
     $('div', 'pmenu-title', panel, title);
     for (const [label, fn, cls] of buttons) { const b = $('button', 'pmenu-btn ' + (cls || ''), panel, label); b.addEventListener('click', fn); }
   }
+  worlds() {
+    const list = this.opts.getWorlds?.() || [];
+    this.page('🗺️ 어느 대지로 갈까요?', [
+      ...list.map((w) => [`${w.locked ? '🔒' : w.cur ? '📍' : '🌍'} ${w.i + 1}. ${w.name}${w.cur ? ' (지금 여기)' : ''}`, () => { if (!w.locked && !w.cur) this.opts.onWorld(w.i); }, w.locked ? 'empty' : '']),
+      ['← 돌아가기', () => this.main()],
+    ]);
+  }
   main() {
     this.page('⏸ 멈춤', [
       ['▶ 계속하기', () => this.close(), 'big'],
       ['💾 저장하기', () => this.slots('save')],
       ['📂 불러오기', () => this.slots('load')],
+      ['🗺️ 월드 선택', () => this.worlds()],
       ['👥 같이 하기', () => this.opts.onCoop?.()],
       ['🏠 처음 화면으로', () => this.confirm('처음 화면으로 갈까요?<br><small>저장하지 않은 진행은 사라져요</small>', () => this.opts.onQuit())],
     ]);

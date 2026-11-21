@@ -70,16 +70,16 @@ export class Effects {
     this.specials.push({ kind: 'tornado', g, dir: dir.clone().setY(0).normalize(), speed, life: 1.3, owner, hit: new Set() });
   }
   // 순간이동형 슈퍼: 블랙홀
-  blackhole(center) {
+  blackhole(center, life = 1.4, size = 12, lift = 4) {
     const g = new THREE.Group();
     const core = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0x050010 }));
     const ring = new THREE.Mesh(new THREE.TorusGeometry(1.4, 0.25, 8, 40), new THREE.MeshBasicMaterial({ color: 0xa060ff, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     const halo = new THREE.Mesh(new THREE.SphereGeometry(1.6, 24, 16), new THREE.MeshBasicMaterial({ color: 0x6a2cff, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     ring.rotation.x = 1.2;
     g.add(core, ring, halo);
-    g.position.copy(center); g.position.y += 4;
+    g.position.copy(center); g.position.y += lift;
     this.scene.add(g);
-    this.specials.push({ kind: 'hole', g, ring, life: 1.4, max: 1.4 });
+    this.specials.push({ kind: 'hole', g, ring, life, max: life, size });
   }
   // 크리스탈 씨앗이 빛줄기로 날아와 캐릭터에게 들어감
   seedBeam(from, target, onArrive) {
@@ -173,7 +173,8 @@ export class Effects {
         if (Math.random() < 0.5) this.burst(s.g.position.clone(), 0xffffff, 1, 4);
       } else if (s.kind === 'hole') {
         const k = 1 - s.life / s.max;
-        const sc = k < 0.3 ? k / 0.3 * 12 : k < 0.75 ? 12 : (1 - k) / 0.25 * 12;
+        const S = s.size || 12, sc = k < 0.2 ? k / 0.2 * S : k < 0.85 ? S * (1 + Math.sin(k * 40) * 0.04) : (1 - k) / 0.15 * S;
+        if (Math.random() < 0.7) { const a = Math.random() * 6.28, r = S * 2.2; this.burst(s.g.position.clone().add(new THREE.Vector3(Math.cos(a) * r, (Math.random() - 0.5) * S, Math.sin(a) * r)), 0x9a5cff, 1, 2); }
         s.g.scale.setScalar(Math.max(0.01, sc));
         s.ring.rotation.z += dt * 8;
       } else if (s.kind === 'seed') {

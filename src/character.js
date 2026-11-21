@@ -3,10 +3,10 @@ import * as THREE from '../vendor/three.module.js';
 
 export const CHARACTER_DEFS = {
   // 임시 오리지널 디자인 (아들이 디자인하면 교체)
-  speed: { body: 0x35d07f, belly: 0xfff1d6, accent: 0xff8a1f, shoe: 0xffffff, superColor: 0xffd700, desc: '숲에서 제일 빠른 친구\n2단 점프: 회전 돌진\n슈퍼: 하늘을 날아가요' },
-  flyer: { body: 0xffd84a, belly: 0xffffff, accent: 0x3d7bff, shoe: 0x3d7bff, superColor: 0xffe680, desc: '하늘을 나는 꼬마 발명가\n2단 점프: A 연타로 비행\n슈퍼: 회오리 발사' },
+  speed: { body: 0x35d07f, belly: 0xfff1d6, accent: 0xff8a1f, shoe: 0xffffff, superColor: 0xffd700, desc: '숲에서 제일 빠른 친구\n2단 점프: 회전 돌진\n슈퍼: 둥실 점프, 번개 내려찍기' },
+  flyer: { body: 0xffd84a, belly: 0xffffff, accent: 0x3d7bff, shoe: 0x3d7bff, superColor: 0xffe680, desc: '하늘을 나는 꼬마 발명가\n2단 점프: A 연타로 헬리콥터 비행\n슈퍼: 회오리 발사' },
   power: { body: 0x9a6a50, belly: 0xffe0b3, accent: 0x2ecc71, shoe: 0x2ecc71, superColor: 0xff7ad9, desc: '힘센 대지의 수호자\n2단 점프: A 꾹 활공\nB(제자리): 펀치! 벽 부수기' },
-  blink: { body: 0x7a52e0, belly: 0xe6e0ff, accent: 0x22e1ff, shoe: 0x22e1ff, superColor: 0xffc9a8, desc: '신비한 순간이동 친구\n2단 점프: 순간이동 공격\n슈퍼: 점프 꾹 → 블랙홀' },
+  blink: { body: 0x7a52e0, belly: 0xe6e0ff, accent: 0x22e1ff, shoe: 0x22e1ff, superColor: 0xffc9a8, desc: '신비한 순간이동 친구\n2단 점프: 순간이동 공격\n슈퍼: C 꾹 → 블랙홀' },
 };
 
 let gradientMap = null;

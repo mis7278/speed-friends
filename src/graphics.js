@@ -297,9 +297,10 @@ export class Graphics {
           // 바람 + 플레이어가 지나가면 눕기
           float wind = sin(time * 1.8 + wp.x * 0.12 + wp.y * 0.09) * 0.22 + sin(time * 3.1 + wp.x * 0.5) * 0.06;
           vec2 away = wp - player.xz; float pd = length(away);
-          vec2 push = pd > 0.01 ? away / pd * (1.0 - smoothstep(0.4, 1.8, pd)) * step(abs(player.y - h.r), 2.0) : vec2(0.0);
-          vec2 bend = (vec2(wind, wind * 0.4) + push * 1.1) * y * y * height;
-          vec3 world = vec3(wp.x + p.x + bend.x, h.r + p.y - dot(push, push) * y * 0.3, wp.y + p.z + bend.y);
+          float trmp = (1.0 - smoothstep(0.6, 2.6, pd)) * step(abs(player.y - h.r), 2.5); // 캐릭터 주변 풀은 눌려서 다리가 보이게
+          vec2 push = pd > 0.01 ? away / pd * trmp : vec2(0.0);
+          vec2 bend = (vec2(wind, wind * 0.4) + push * 1.3) * y * y * height;
+          vec3 world = vec3(wp.x + p.x + bend.x, h.r + p.y * (1.0 - trmp * 0.75), wp.y + p.z + bend.y);
           vY = y; vRand = r; vFlower = flower;
           vTint = h.bbb;
           vec4 mvPosition = viewMatrix * vec4(world, 1.0);

@@ -15,6 +15,12 @@ export function loadProgress() {
   if (!p || !Array.isArray(p.crystals)) p = { crystals: [false, false, false, false, false], hardUnlocked: false, hardCrystals: [false, false, false, false, false] };
   return p;
 }
+// 가 본 대지 (월드 선택에서 고를 수 있음)
+export function markReached(stageIdx) {
+  const p = loadProgress();
+  if ((p.reached || 0) < stageIdx) { p.reached = stageIdx; saveProgress(p); }
+  return p.reached || 0;
+}
 export function saveProgress(p) {
   try { localStorage.setItem(KEY, JSON.stringify(p)); } catch (e) {}
 }

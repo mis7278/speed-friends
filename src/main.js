@@ -17,11 +17,11 @@ import { Boss } from './boss.js';
 import { CHARACTER_DEFS } from './character.js';
 import { Cinematic, V } from './cinematic.js';
 import { Scientist, GearHologram, LINES, RADIO_FRIEND } from './story.js';
-import { loadProgress, recoverCrystal, BIG_CRYSTALS } from './progress.js';
+import { loadProgress, recoverCrystal, BIG_CRYSTALS, markReached } from './progress.js';
 import { readSave, hasAnySave } from './save.js';
 import { PauseMenu, showLoadList } from './menu.js';
 import { Guardians } from './guardian.js';
-import { Net } from './net.js';
+import { Net, P_COLORS } from './net.js';
 
 function showError(msg) {
   let box = document.getElementById('err');
@@ -107,7 +107,7 @@ function boot() {
     game.player = pl; game.players = [pl];
     if (carry && stageIdx > 0) pl.storedHearts = carry.hearts || 0;
   }
-  setCharacter(LOAD ? LOAD.char : carry?.char && stageIdx > 0 ? carry.char : 'speed');
+  setCharacter(LOAD ? LOAD.char : carry?.char || 'speed');
   game.cam.yaw = W.spawn.yaw;
   playMusic('title');
 
@@ -126,26 +126,66 @@ function boot() {
   // 한 지점 주위를 빙 돌며 보여주는 장면
   game.playCine = playCine;
   game.stageIdx = stageIdx;
-  // ---- 같이 하기 ----
-  const net = new Net(game); game.net = net; game.hud.friends = net.remotes;
-  const coopPanel = document.getElementById('coop-panel'), coopStatus = document.getElementById('coop-status'), coopList = document.getElementById('coop-list');
-  const coopBadge = document.getElementById('coop-badge'), coopLeave = document.getElementById('coop-leave'), coopCode = document.getElementById('coop-code');
-  net.onChange = () => {
-    coopStatus.textContent = net.status;
-    coopLeave.style.display = net.code ? '' : 'none';
-    coopList.textContent = net.code ? `지금 ${net.count}명` + (net.remotes.size ? ' — ' + [...net.remotes.values()].map((r) => `P${r.num} ${NAMES.characters[r.kind]}`).join(', ') : '') : '';
-    coopBadge.classList.toggle('on', !!net.code);
-    coopBadge.textContent = net.code ? `👥 방 ${net.code} · ${net.count}명` : '';
+  // ---- 월드 선택 (가 본 대지는 언제든 다시 갈 수 있음) ----
+  const reached = markReached(stageIdx);
+  let stageSel = stageIdx;
+  const goStage = (i, stay = false) => { // stay: 그 대지의 시작 화면에서 멈춤 / 아니면 바로 시작
+    try { sessionStorage.setItem('sf-carry', JSON.stringify({ char: pl.kind, hearts: pl.storedHearts, hard: game.hard, pick: stay })); if (!stay) sessionStorage.setItem('sf-autostart', '1'); } catch (e) {}
+    location.href = `?stage=${i}`;
   };
-  const openCoop = () => { coopPanel.classList.add('on'); net.onChange(); };
-  document.getElementById('coop-btn').addEventListener('click', openCoop);
-  document.getElementById('coop-close').addEventListener('click', () => coopPanel.classList.remove('on'));
-  document.getElementById('coop-host').addEventListener('click', () => net.createRoom());
-  document.getElementById('coop-join').addEventListener('click', () => net.joinRoom(coopCode.value));
+  // ---- 같이 하기: 방 만들기 → 대기실(들어온 친구 보기, 캐릭터 고르기) → 방장이 시작 ----
+  const $id = (id) => document.getElementById(id);
+  const coopPanel = $id('coop-panel'), coopBadge = $id('coop-badge'), coopCode = $id('coop-code');
+  const net = new Net(game, {
+    getKind: () => pl.kind, isStarted: () => started, getStage: () => stageSel,
+    getQuest: () => (q.i >= 0 ? q.i : (q.pending ?? 0)),
+    onStart: (stage) => coopStart(stage), onQuest: (n, fromFriend) => syncQuest(n, fromFriend), onChange: () => renderCoop(),
+  });
+  game.net = net; game.hud.friends = net.remotes;
+  function pickChar(k) {
+    for (const el of $id('cards').children) el.classList.toggle('sel', el.dataset.kind === k);
+    if (k !== pl.kind) { setCharacter(k); if (started) { pl.spawnAt(W.nearestCheckpoint(game.player.pos).pos.clone().add(V(0, 0.3, 0)), 0); } }
+    net.pick(k); renderCoop();
+  }
+  function renderCoop() {
+    const inRoom = !!net.code;
+    $id('coop-entry').style.display = inRoom ? 'none' : '';
+    $id('coop-lobby').style.display = inRoom ? '' : 'none';
+    $id('coop-leave').style.display = inRoom ? '' : 'none';
+    $id('coop-status').textContent = net.status;
+    coopBadge.classList.toggle('on', inRoom);
+    coopBadge.textContent = inRoom ? `👥 방 ${net.code} · ${net.count}명` : '';
+    if (!inRoom) return;
+    $id('coop-roomcode').textContent = net.code;
+    const mem = net.members, myId = net.peer?.id;
+    $id('coop-members').innerHTML = [0, 1, 2, 3].map((i) => {
+      const m = mem[i];
+      if (!m) return `<div class="coop-mem empty">P${i + 1} · 빈 자리</div>`;
+      return `<div class="coop-mem${m.id === myId ? ' me' : ''}" style="color:${P_COLORS[i]}">P${m.num} ${m.host ? '👑 ' : ''}${NAMES.characters[m.kind]}${m.id === myId ? ' (나)' : ''}</div>`;
+    }).join('');
+    $id('coop-chars').innerHTML = '';
+    for (const k of kinds) { const b = document.createElement('button'); b.textContent = NAMES.characters[k]; b.className = k === pl.kind ? 'sel' : ''; b.onclick = () => pickChar(k); $id('coop-chars').appendChild(b); }
+    $id('coop-stage-box').style.display = net.host && !started ? '' : 'none';
+    $id('coop-stages').innerHTML = '';
+    for (let i = 0; i < NAMES.stages.length; i++) { const b = document.createElement('button'); b.textContent = `${i + 1}. ${NAMES.stages[i]}`; b.disabled = i > reached; b.className = i === stageSel ? 'sel' : ''; b.onclick = () => { stageSel = i; net._roster(); renderCoop(); }; $id('coop-stages').appendChild(b); }
+    $id('coop-start').style.display = net.host && !started ? '' : 'none';
+    $id('coop-start').textContent = `▶ 다 같이 시작! (${net.count}명)`;
+    $id('coop-wait').textContent = started ? '🎮 게임 중 — 닫기를 누르고 같이 놀아요!' : net.host ? '' : '방장이 시작하기를 기다리는 중… 그동안 캐릭터를 골라요!';
+  }
+  function coopStart(stage) {
+    coopPanel.classList.remove('on');
+    if (stage !== stageIdx) { goStage(stage); return; }
+    if (!started) startGame().then(() => setTimeout(() => { if (net.lastQuest) syncQuest(net.lastQuest, true); }, 600));
+  }
+  const openCoop = () => { coopPanel.classList.add('on'); renderCoop(); };
+  $id('coop-btn').addEventListener('click', openCoop);
+  $id('coop-close').addEventListener('click', () => coopPanel.classList.remove('on'));
+  $id('coop-host').addEventListener('click', () => net.createRoom());
+  $id('coop-join').addEventListener('click', () => net.joinRoom(coopCode.value));
+  $id('coop-start').addEventListener('click', () => net.startAll(stageSel));
   coopCode.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') net.joinRoom(coopCode.value); });
-  coopLeave.addEventListener('click', () => net.leave());
+  $id('coop-leave').addEventListener('click', () => { net.leave(); renderCoop(); });
   game.openCoop = openCoop;
-  net.resume();
   const orbit = (c, dist, h, a0, a1, dur, text, who, extra = {}) => ({
     from: { pos: V(c.x + Math.sin(a0) * dist, c.y + h, c.z + Math.cos(a0) * dist), look: c.clone().add(V(0, 3, 0)) },
     to: { pos: V(c.x + Math.sin(a1) * dist, c.y + h * 0.85, c.z + Math.cos(a1) * dist), look: c.clone().add(V(0, 3, 0)) },
@@ -345,10 +385,28 @@ function boot() {
     q.i = -2; // 잠깐 멈춤
     const idx = quests.indexOf(Q);
     q.pending = idx + 1;
-    const next = () => { Q.outroEnd?.(); startQuest(idx + 1); };
+    net.sendQuest(idx + 1); // 같이 하는 친구들도 다 같이 다음 퀘스트로
+    const next = () => { Q.outroEnd?.(); if (q.i === -2) startQuest(idx + 1); };
     if (Q.outro) setTimeout(() => playCine(Q.outro(), next), 900); else next();
   }
   game.quests = q; game.startQuest = startQuest;
+  // 이미 지나간 퀘스트의 결과를 맵에 반영 (불러오기·친구가 퀘스트를 깼을 때)
+  function applyQuestEffects(n) {
+    const dead = (tag) => { const c = core(tag); if (c) { c.alive = false; if (c.mesh) c.mesh.visible = false; c.shielded = false; } };
+    if (n >= 1) dead('base');
+    if (n >= 2) dead('factory');
+    if (n === 3 || n === 4) sci.show(W.labPad.clone().add(V(0, 7, 0)));
+    if (n >= 5) { sci.hide?.(); if (W.barrierUp) { W.removeBarrier(); W.barrierSink = 9; } W.restoreTree(); if (game.boss) { game.boss.dispose?.(); game.boss = null; } }
+  }
+  function syncQuest(n, fromFriend) {
+    const cur = q.i >= 0 ? q.i : (q.pending ?? 0);
+    if (!started || n <= cur || n >= quests.length + 1) return;
+    applyQuestEffects(n);
+    if (cine.active) cine.skip();
+    q.pending = n;
+    startQuest(Math.min(n, quests.length - 1), true);
+    if (fromFriend) game.hud.toast('🤝 친구가 퀘스트를 깼어요! 다 같이 다음 퀘스트로!', 'gold');
+  }
 
   // 처음 이야기 (고른 캐릭터에 맞춰 시작할 때 만듦)
   const buildIntro = () => [
@@ -396,6 +454,7 @@ function boot() {
   }
   // 되찾은 대지의 크리스탈 표시
   const prog0 = loadProgress();
+  game.allClear = prog0.crystals.every(Boolean); // 5개 대지를 모두 되찾으면 링 없이 슈퍼 변신 (5분, 쿨타임 1분)
   const showStageInfo = () => { const pr = loadProgress(); game.hud.setStageInfo(STAGE.place, game.hard ? pr.hardCrystals : pr.crystals, BIG_CRYSTALS.map((c) => c.color), game.hard); };
   showStageInfo();
 
@@ -404,7 +463,6 @@ function boot() {
   game.input.update = (dt) => {
     origUpdate(dt);
     if (!started) return;
-    if (game.input.buttons.item1.pressed) game.hud.toast(`💎 ${NAMES.crystal} ${game.missions.crystals}/3 — 오른쪽 위 시련 3개를 해내면 크리스탈이 보내줘요`);
     if (game.input.buttons.item2.pressed) pl.useHeart();
   };
 
@@ -466,7 +524,6 @@ function boot() {
     W.stream(pl.pos, dt);
     game.gfx.update(dt, game.time, pl.pos);
 
-    if (!game.hard) for (const m of game.missions.check(pl.stats)) giveSeed(m);
     let target = null;
     const Q = quests[q.i];
     if (Q) {
@@ -531,12 +588,12 @@ function boot() {
   for (const k of kinds) {
     const d = CHARACTER_DEFS[k];
     const c = document.createElement('button');
-    c.className = 'card' + (k === pl.kind ? ' sel' : '');
+    c.className = 'card' + (k === pl.kind ? ' sel' : ''); c.dataset.kind = k;
     c.innerHTML = `<div class="card-dot" style="background:#${d.body.toString(16).padStart(6, '0')}"></div><div class="card-name">${NAMES.characters[k]}</div><div class="card-type">${typeName[k]}</div><div class="card-desc">${d.desc}</div>`;
     c.addEventListener('click', () => {
       for (const el of cards.children) el.classList.remove('sel');
       c.classList.add('sel');
-      setCharacter(k);
+      setCharacter(k); net.pick(k);
       initAudio(); SFX.jump();
     });
     cards.appendChild(c);
@@ -598,12 +655,7 @@ function boot() {
     for (const i of d.checkpoints || []) if (W.checkpoints[i]) { W.activateCheckpoint(W.checkpoints[i]); W.checkpoints[i].flash = 0; }
     for (const i of d.chests || []) { const c = W.chests[i]; if (c) { c.opened = true; c.lid.rotation.x = -1.9; const b = W.beacons.find((x) => x.name === c.name); if (b) b.found = true; } }
     for (const i of d.places || []) if (W.discoveries[i]) W.discoveries[i].found = true;
-    // 이미 지나간 퀘스트의 결과를 맵에 반영
-    const dead = (tag) => { const c = core(tag); if (c) { c.alive = false; c.mesh.visible = false; c.shielded = false; } };
-    if (d.quest >= 1) dead('base');
-    if (d.quest >= 2) dead('factory');
-    if (d.quest === 3 || d.quest === 4) sci.show(W.labPad.clone().add(V(0, 7, 0)));
-    if (d.quest >= 5) { W.removeBarrier(); W.barrierSink = 9; W.restoreTree(); }
+    applyQuestEffects(d.quest || 0);
     const cp = W.checkpoints[d.cp] || W.startCheckpoint;
     pl.spawnAt(cp.pos.clone().add(V(0, 0.3, 0)), 0);
   }
@@ -613,10 +665,17 @@ function boot() {
     onLoad: (slot) => { const d = readSave(slot); if (d) location.href = `?stage=${d.stage}&load=${slot}`; },
     onQuit: () => { net.leave(); location.href = location.pathname; },
     onCoop: () => openCoop(),
+    getWorlds: () => NAMES.stages.map((name, i) => ({ i, name, locked: i > reached, cur: i === stageIdx })),
+    onWorld: (i) => {
+      if (net.code && !net.host) { game.hud.toast('같이 하는 중에는 방장이 대지를 골라요'); return; }
+      if (net.code && net.host) { net.startAll(i); return; }
+      goStage(i);
+    },
   });
   game.getSaveData = getSaveData;
 
   async function startGame() {
+    document.activeElement?.blur?.(); // 버튼에 남은 포커스 때문에 스페이스가 버튼을 누르지 않게
     initAudio();
     document.getElementById('start').classList.add('hidden');
     if (isTouch) {
@@ -632,7 +691,23 @@ function boot() {
     clock.getDelta();
     playCine(buildIntro(), () => { startQuest(0); game.hud.toast(`${NAMES.characters[pl.kind]}(으)로 ${NAMES.stages[stageIdx]} 스테이지 시작!`); });
   }
-  document.getElementById('start-btn').addEventListener('click', startGame);
+  document.getElementById('start-btn').addEventListener('click', () => {
+    if (net.code && net.host) { net.startAll(stageSel); return; }       // 방장: 다 같이 시작
+    if (net.code && !net.host) { openCoop(); return; }                  // 친구: 방장이 시작할 때까지 대기
+    startGame();
+  });
+  // 월드 선택 (시작 화면)
+  {
+    const box = document.getElementById('stage-pick');
+    NAMES.stages.forEach((name, i) => {
+      const b = document.createElement('button');
+      b.innerHTML = `${i > reached ? '🔒' : ''}${i + 1}. ${name}`; b.disabled = i > reached; if (i === stageIdx) b.classList.add('sel');
+      b.addEventListener('click', () => { if (i !== stageIdx) goStage(i, true); });
+      box.appendChild(b);
+    });
+    if (reached === 0) box.style.display = 'none';
+  }
+  net.resume();
   if (prog0.hardUnlocked && stageIdx === 0) {
     const box = document.getElementById('modes');
     box.style.display = '';
@@ -664,7 +739,8 @@ function boot() {
     game.hud.hide(false); game.pauseMenu.enable(true);
     startQuest(Math.min(LOAD.quest || 0, quests.length - 1), true);
     game.hud.toast(`📂 ${loadSlot}번 칸에서 이어하기!`, 'gold');
-  } else if (stageIdx > 0 && carry) { sessionStorage.removeItem('sf-carry'); startGame(); }
+  } else if (sessionStorage.getItem('sf-autostart')) { sessionStorage.removeItem('sf-autostart'); sessionStorage.removeItem('sf-carry'); startGame(); }
+  else if (stageIdx > 0 && carry && !carry.pick) { sessionStorage.removeItem('sf-carry'); startGame(); }
   else document.getElementById('start').classList.remove('hidden');
   frame();
 }

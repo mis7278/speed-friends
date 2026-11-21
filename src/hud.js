@@ -36,8 +36,16 @@ export class HUD {
     this.mapCanvas = $('canvas', 'minimap', tr);
     this.mapCanvas.width = 180; this.mapCanvas.height = 180;
     this.mapCtx = this.mapCanvas.getContext('2d');
+    // 큰 지도 (미니맵을 누르거나 M 키)
+    this.mapCanvas.style.pointerEvents = 'auto'; this.mapCanvas.style.cursor = 'pointer';
+    this.big = $('div', 'bigmap', document.body); this.bigCv = $('canvas', '', this.big); this.bigCv.width = this.bigCv.height = 640;
+    $('div', 'bigmap-hint', this.big, '지도를 누르면 닫혀요');
+    const toggle = (e) => { e?.preventDefault?.(); this.bigOpen = !this.bigOpen; this.big.classList.toggle('on', this.bigOpen); };
+    this.mapCanvas.addEventListener('pointerdown', (e) => { e.stopPropagation(); toggle(e); });
+    this.big.addEventListener('pointerdown', toggle);
+    window.addEventListener('keydown', (e) => { if (e.code === 'KeyM' && !e.repeat && e.target.tagName !== 'INPUT') toggle(); });
     const ms = $('div', 'missions', tr);
-    this.missionsBox = ms;
+    this.missionsBox = ms; ms.style.display = 'none'; // 시련 제도 없앰 (링 50개면 누구나 변신)
     this.missionsTitle = $('div', 'missions-title', ms, `🌱 ${NAMES.trial}`);
     this.missionRows = [0, 1, 2].map(() => $('div', 'mission-row', ms, ''));
 
@@ -58,6 +66,7 @@ export class HUD {
     const items = $('div', 'items', root);
     this.slotCrystal = $('div', 'slot', items, `<div class="slot-key">1</div><div class="slot-icon">🌱</div><div class="slot-count">0/3</div>`);
     this.slotHeart = $('div', 'slot', items, `<div class="slot-key">2</div><div class="slot-icon">❤️</div><div class="slot-count">0</div>`);
+    this.slotCrystal.style.display = 'none';
     this.slotCrystal.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressTouch('item1'); setTimeout(() => input.releaseTouch('item1'), 50); });
     this.slotHeart.addEventListener('pointerdown', (e) => { e.preventDefault(); input.pressTouch('item2'); setTimeout(() => input.releaseTouch('item2'), 50); });
 
@@ -93,7 +102,7 @@ export class HUD {
         joyBase.classList.add('on');
         input.touchMove.active = true; input.touchMove.x = 0; input.touchMove.y = 0;
       } else if (camId === null) { camId = e.pointerId; camX = e.clientX; camY = e.clientY; }
-      else if (pinchId === null) { pinchId = e.pointerId; pinX = e.clientX; pinY = e.clientY; pinD = Math.hypot(pinX - camX, pinY - camY); }
+      else if (pinchId === null && e.clientX >= window.innerWidth * 0.45) { pinchId = e.pointerId; pinX = e.clientX; pinY = e.clientY; pinD = Math.hypot(pinX - camX, pinY - camY); }
       layer.setPointerCapture(e.pointerId);
     });
     layer.addEventListener('pointermove', (e) => {
@@ -124,6 +133,17 @@ export class HUD {
     };
     layer.addEventListener('pointerup', end);
     layer.addEventListener('pointercancel', end);
+    layer.addEventListener('lostpointercapture', end);
+    // 화면에 손가락이 하나도 없으면 전부 초기화 (iOS에서 손가락 떼는 신호를 놓치는 경우 대비)
+    const resetAll = (e) => {
+      const ids = new Set([...(e.touches || [])].map((t) => t.identifier));
+      if (ids.size === 0) {
+        if (joyId !== null) { joyId = null; input.touchMove.active = false; input.touchMove.x = 0; input.touchMove.y = 0; joyKnob.style.transform = ''; joyBase.classList.remove('on'); }
+        camId = null; pinchId = null;
+      } else if (ids.size === 1) pinchId = null; // 한 손가락만 남으면 확대·축소 끝
+    };
+    window.addEventListener('touchend', resetAll, true);
+    window.addEventListener('touchcancel', resetAll, true);
     const mk = (name, label, cls) => {
       const b = $('div', 'tbtn ' + cls, this.root, label);
       b.addEventListener('pointerdown', (e) => { e.preventDefault(); b.setPointerCapture(e.pointerId); b.classList.add('down'); input.pressTouch(name); });
@@ -168,7 +188,9 @@ export class HUD {
     let st = '';
     if (p.superOn) st = `✨ ${NAMES.superForm} 변신 중! (속도 ×${CFG.super.speedMul})`;
     else if (p.canTransform()) st = `✨ 점프를 꾹 눌러 ${NAMES.superForm} 변신!`;
-    if (p.kind === 'blink' && p.superOn) st += p.ultCD > 0 ? ` 🌑 ${Math.ceil(p.ultCD)}초` : ' 🌑 점프 꾹: 블랙홀!';
+    if (p.superOn) st += ' (점프 꾹: 변신 풀기)';
+    if (!p.superOn && p.superCD > 0) st = `✨ 다시 변신까지 ${Math.ceil(p.superCD)}초`;
+    if (p.kind === 'blink' && p.superOn) st += p.ultCD > 0 ? ` 🌑 ${Math.ceil(p.ultCD)}초` : ' 🌑 C 꾹: 블랙홀!';
     if (p.kind === 'flyer' && p.superOn && p.tornadoCD > 0) st += ` 🌪 ${Math.ceil(p.tornadoCD)}초`;
     this.superText.textContent = st;
     const showGauge = p.kind === 'flyer' && !p.superOn && (p.flying || p.flyGauge < CFG.flyer.gaugeMax);
@@ -187,23 +209,30 @@ export class HUD {
     this.speedText.textContent = Math.round(sp * 3.6) + ' km/h';
     this.speedo.classList.toggle('super', p.superOn);
 
-    this.slotCrystal.querySelector('.slot-count').textContent = this.hard ? '∞' : `${missions.crystals}/3`;
-    this.slotCrystal.classList.toggle('full', this.hard || missions.crystals >= 3);
     this.slotHeart.querySelector('.slot-count').textContent = p.storedHearts;
     this.slotHeart.classList.toggle('empty', p.storedHearts === 0);
-    missions.list.forEach((m, i) => {
-      const row = this.missionRows[i];
-      const cur = Math.min(m.target, stats[m.stat] || 0);
-      const txt = m.done ? `✅ ${m.text(m.target)}` : `⬜ ${m.text(m.target)}${m.target > 1 ? ` (${cur}/${m.target})` : ''}`;
-      if (row.textContent !== txt) { row.textContent = txt; row.classList.toggle('done', m.done); }
-    });
-    const show = p.state === 'charge';
-    this.charge.classList.toggle('on', show);
-    if (show) this.chargeCells.forEach((c, i) => c.classList.toggle('lit', i < p.chargeLevel));
     this.questDist.textContent = questDist != null ? `${Math.round(questDist)}m` : '';
   }
 
+  // 큰 지도: 맵 전체 + 랜드마크 이름 + 나와 친구 위치
+  drawBigMap(player, world, questTarget) {
+    const ctx = this.bigCv.getContext('2d'), Wd = 640, half = world.mapHalf || 1800, k = Wd / (half * 2);
+    const M = (x, z) => [Wd / 2 - x * k, Wd / 2 - z * k]; // 미니맵과 같은 방향 (처음 출발 방향이 위쪽)
+    ctx.clearRect(0, 0, Wd, Wd);
+    if (world.mapCanvas) { ctx.save(); ctx.translate(Wd, Wd); ctx.rotate(Math.PI); ctx.drawImage(world.mapCanvas, 0, 0, Wd, Wd); ctx.restore(); }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const L of world.landmarks || []) {
+      const [x, y] = M(L.x, L.z);
+      ctx.font = '22px sans-serif'; ctx.fillText(L.icon, x, y);
+      ctx.font = 'bold 12px sans-serif'; ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(L.name, x, y + 17); ctx.fillStyle = '#fff'; ctx.fillText(L.name, x, y + 17);
+    }
+    const dot = (x, z, color, label, r = 7) => { const [px, py] = M(x, z); ctx.fillStyle = color; ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px, py, r, 0, 7); ctx.fill(); ctx.stroke(); if (label) { ctx.font = 'bold 13px sans-serif'; ctx.lineWidth = 3; ctx.strokeText(label, px, py - 15); ctx.fillStyle = '#fff'; ctx.fillText(label, px, py - 15); } };
+    if (questTarget) dot(questTarget.x, questTarget.z, '#ffe600', '목표', 7);
+    if (this.friends) for (const r of this.friends.values()) if (r.view.root.visible) dot(r.pos.x, r.pos.z, '#7df0ff', 'P' + r.num);
+    dot(player.pos.x, player.pos.z, '#ff4d4d', '나', 8);
+  }
   drawMinimap(player, world, enemies, questTarget, camYaw, boss) {
+    if (this.bigOpen) this.drawBigMap(player, world, questTarget);
     const ctx = this.mapCtx, W = 180, H = 180, scale = 0.38;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
@@ -235,6 +264,20 @@ export class HUD {
       ctx.fillStyle = color; ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(px, pz, r, 0, 7); ctx.fill(); ctx.stroke();
     };
+    // 랜드마크 그림
+    ctx.font = '15px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const L of world.landmarks || []) { const [px, pz] = S(L.x, L.z); if (Math.hypot(px - W / 2, pz - H / 2) < W / 2 - 8) ctx.fillText(L.icon, px, pz); }
+    // 같이 하는 친구: 멀리 있으면 가장자리에 방향 + 거리
+    if (this.friends) for (const r of this.friends.values()) {
+      if (!r.view.root.visible) continue;
+      let [px, pz] = S(r.pos.x, r.pos.z);
+      const dx = px - W / 2, dz = pz - H / 2, l = Math.hypot(dx, dz), max = W / 2 - 12;
+      const far = l > max; if (far) { px = W / 2 + dx / l * max; pz = H / 2 + dz / l * max; }
+      ctx.fillStyle = '#7df0ff'; ctx.strokeStyle = '#003'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, pz, 6, 0, 7); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#003'; ctx.font = 'bold 9px sans-serif'; ctx.fillText('P' + r.num, px, pz + 0.5);
+      if (far) { const d = Math.round(Math.hypot(r.pos.x - player.pos.x, r.pos.z - player.pos.z)); ctx.font = 'bold 10px sans-serif'; ctx.lineWidth = 3; ctx.strokeStyle = '#000'; ctx.strokeText(d + 'm', px - dx / l * 16, pz - dz / l * 16); ctx.fillStyle = '#fff'; ctx.fillText(d + 'm', px - dx / l * 16, pz - dz / l * 16); }
+    }
     if (questTarget) pin(questTarget.x, questTarget.z, '#ffe600', 6);
     if (boss && boss.spawned && boss.alive) pin(boss.pos.x, boss.pos.z, '#ff2020', 8);
     ctx.restore();

@@ -277,7 +277,9 @@ export class Boss {
       if ((this.vulnerable || p.superOn) && p.attacking) {
         this.damage(1, p);
         const away = c.clone().sub(this.pos).setY(0).normalize();
-        p.vel.set(away.x * 14, 14, away.z * 14); p.state = 'air'; p.s = 0; p.airActionUsed = false; p.slamming = false; p.cancelAbilities();
+        const big = p.bounceBuffer > 0; // 맞히는 순간 점프 = 더 높이
+        p.vel.set(away.x * 12, big ? 30 : 17, away.z * 12); p.state = 'air'; p.s = 0; p.airActionUsed = false; p.slamming = false; p.cancelAbilities();
+        p.ball = true; p.bounceBuffer = 0; p.bounceWindow = big ? 0 : 0.2; if (big) p.bigBounceFx?.();
       } else if (!p.superOn) {
         p.hurt(this.pos);
       }
