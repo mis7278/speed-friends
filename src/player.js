@@ -359,7 +359,7 @@ export class Player {
     const c = this.pos.clone().addScaledVector(dir, 30);
     c.y = this.game.world.groundAt(c.x, c.z, this.pos.y + 20) + 14;
     this.ult = { t: 0, dir, y0: this.pos.y, center: c, fired: false, boom: false, pulled: [] };
-    this.game.freezeT = 2.1;
+    this.game.freezeT = 99;
     this.state = 'air'; this.vel.set(0, 0, 0); this.ball = false; this.rolling = false;
     this.invuln = Math.max(this.invuln, 3);
     SFX.blackhole();
@@ -371,7 +371,7 @@ export class Player {
     this.pos.y = u.y0 + Math.min(1, u.t / 0.6) * 8;
     if (!u.fired && u.t > 0.6) {
       u.fired = true;
-      this.game.fx.blackhole(u.center.clone().setY(u.center.y - 4), 1.9, 8, 4);
+      u.hole = this.game.fx.blackhole(u.center.clone().setY(u.center.y - 4), 99, 8, 4); // 다 모일 때까지 유지
       this.game.hud.flash('rgba(60,0,120,0.55)');
       for (const e of en.list) {
         if (!e.alive || e.dying > 0 || e.T.static) continue;
@@ -382,14 +382,16 @@ export class Player {
     if (u.fired && !u.boom) { // 빨려 들어감
       for (const e of u.pulled) {
         if (!e.alive) continue;
-        const k = Math.min(1, dt * (1.5 + u.t));
+        const k = Math.min(1, dt * (1.2 + u.t * 0.8));
         e.pos.lerp(u.center, k);
         if (e.mesh) { e.mesh.position.copy(e.pos); e.mesh.rotation.y += dt * 12; e.mesh.rotation.x += dt * 6; e.mesh.scale.setScalar(Math.max(0.5, 1 - (u.t - 0.6) * 0.3)); }
       }
       this.shake = Math.max(this.shake, 0.15);
     }
-    if (!u.boom && u.t > 2.0) { // 쾅!
-      u.boom = true;
+    const gathered = u.fired && u.t > 1.4 && u.pulled.every((e) => !e.alive || e.pos.distanceTo(u.center) < 3);
+    if (!u.boom && (gathered || u.t > 6)) { // 다 모이면 쾅!
+      u.boom = true; u.boomT = u.t; this.game.freezeT = 0;
+      if (u.hole) { u.hole.closing = true; u.hole.life = 0.3; }
       this.game.fx.explosion(u.center, 3.5);
       this.game.fx.shockwave(u.center.clone().setY(u.center.y - 8), B.ultPullRange * 0.6, 0xb070ff);
       this.game.fx.burst(u.center, 0x6a2cff, 40, 22); this.game.fx.burst(u.center, 0xffffff, 30, 18);
@@ -404,7 +406,7 @@ export class Player {
       if (this.game.boss?.targetable && this.game.boss.pos.distanceTo(u.center) < B.ultPullRange * 1.2) this.game.boss.damage(2, this);
       this.smashAround(u.center.clone().setY(u.center.y - 9), 25);
     }
-    if (u.t > 2.6) { this.ult = null; this.state = 'air'; this.vel.set(0, 2, 0); }
+    if (u.boom && u.t > u.boomT + 0.6) { this.ult = null; this.state = 'air'; this.vel.set(0, 2, 0); }
   }
 
   // ---------------- 스핀 / 내려찍기 ----------------
@@ -959,8 +961,8 @@ export class Player {
         } else if (ballHit && this.state === 'ground') { // 땅에서 굴러서 맞혀도 톡 튕겨 오름
           this.vel.set(Math.sin(this.yaw) * this.s * 0.6, CFG.player.rollBounce, Math.cos(this.yaw) * this.s * 0.6);
           this.state = 'air'; this.standOn = null; this.ball = true; this.rolling = false; this.airActionUsed = false; this.bounceWindow = 0.2;
-        } else if (!killed && !this.superOn && e.alive && e.dying <= 0 && !e.shielded && this.state === 'charge') { // 스핀 충전 중: 살짝 밀리기만
-          this.knockV = center.clone().sub(ec).setY(0).normalize().multiplyScalar(6);
+        } else if (this.state === 'charge') { // 스핀 충전 중: 몬스터만 맞고 뒤로 날아감, 나는 제자리에서 계속 회전
+          if (!killed && e.alive && e.dying <= 0 && !e.T.static) { const d = ec.clone().sub(center).setY(0).normalize().multiplyScalar(14); e.flyV = d; e.flyV.y = 10; e.flyT = 2.5; e.stunT = 0.6; }
         } else if (!killed && !this.superOn && e.alive && e.dying <= 0 && !e.shielded) { // 단단한 몬스터: 튕겨남
           const away = center.clone().sub(ec).setY(0).normalize();
           this.vel.x = away.x * 10; this.vel.z = away.z * 10; this.vel.y = 9; this.state = 'air'; this.s = 0;
@@ -1111,8 +1113,7 @@ export class Player {
     this.invuln = P.hurtInvuln;
     if (this.state === 'charge') { // 스핀 충전 중: 밀려나기만 하고 스핀은 계속
       const away = this.pos.clone().sub(fromPos).setY(0); if (away.lengthSq() < 0.01) away.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
-      this.knockV = away.normalize().multiplyScalar(P.hurtKnockback * 0.7);
-      this.shake = 0.25; this.hurtT = 0.3;
+      this.shake = 0.25; this.hurtT = 0.3; // 제자리에서 계속 회전
       if (this.health <= 0) this.die();
       return;
     }

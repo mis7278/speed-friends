@@ -79,7 +79,9 @@ export class Effects {
     g.add(core, ring, halo);
     g.position.copy(center); g.position.y += lift;
     this.scene.add(g);
-    this.specials.push({ kind: 'hole', g, ring, life, max: life, size });
+    const sp = { kind: 'hole', g, ring, life, max: life, size };
+    this.specials.push(sp);
+    return sp;
   }
   // 크리스탈 씨앗이 빛줄기로 날아와 캐릭터에게 들어감
   seedBeam(from, target, onArrive) {
@@ -173,7 +175,7 @@ export class Effects {
         if (Math.random() < 0.5) this.burst(s.g.position.clone(), 0xffffff, 1, 4);
       } else if (s.kind === 'hole') {
         const k = 1 - s.life / s.max;
-        const S = s.size || 12, sc = k < 0.2 ? k / 0.2 * S : k < 0.85 ? S * (1 + Math.sin(k * 40) * 0.04) : (1 - k) / 0.15 * S;
+        const S = s.size || 12, grow = Math.min(1, (s.max - s.life) / 0.4), sc = s.closing ? Math.max(0.01, s.life / 0.3) * S : grow * S * (1 + Math.sin(s.life * 12) * 0.04);
         if (Math.random() < 0.7) { const a = Math.random() * 6.28, r = S * 2.2; this.burst(s.g.position.clone().add(new THREE.Vector3(Math.cos(a) * r, (Math.random() - 0.5) * S, Math.sin(a) * r)), 0x9a5cff, 1, 2); }
         s.g.scale.setScalar(Math.max(0.01, sc));
         s.ring.rotation.z += dt * 8;
