@@ -103,7 +103,7 @@ export class Player {
   // ---------------------------------------------------------
   update(dt, input, camYaw) {
     const P = CFG.player;
-    for (const k of ['invuln', 'controlLock', 'padCooldown', 'dashTime', 'ringSfxCooldown', 'shake', 'hurtT', 'punchT', 'tornadoCD', 'ultCD', 'loopCD', 'bounceWindow', 'bounceBuffer']) this[k] = Math.max(0, this[k] - dt);
+    for (const k of ['invuln', 'controlLock', 'padCooldown', 'dashTime', 'ringSfxCooldown', 'shake', 'hurtT', 'punchT', 'tornadoCD', 'ultCD', 'loopCD', 'bounceWindow', 'bounceBuffer', 'superPunchCD']) this[k] = Math.max(0, this[k] - dt);
     this.flashV = Math.max(0, this.flashV - dt * 2);
 
     if (this.state === 'dead') {
@@ -276,6 +276,7 @@ export class Player {
   }
 
   punch() {
+    if (this.superOn) { if ((this.superPunchCD || 0) <= 0) this.superPunch(); return; }
     this.punchT = 0.35;
     SFX.punch();
     const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
@@ -290,6 +291,64 @@ export class Player {
       if (Math.hypot(c.x - cx, c.z - cz) < 2.2) this.breakWall(w);
     }
     this.game.fx.burst(c.clone().setY(this.pos.y + 1), 0xffffff, 6, 5);
+  }
+
+  // 파워형 슈퍼 활강: 아주 빠르게 날며, 땅에 내려올 때까지 지나가는 곳 아래를 계속 공격
+  superGlideTick(dt) {
+    const C = CFG.power;
+    const hs = Math.hypot(this.vel.x, this.vel.z);
+    if (hs < C.superGlideSpeed) { const f = Math.sin(this.yaw), c = Math.cos(this.yaw); this.vel.x += f * (C.superGlideSpeed - hs) * Math.min(1, dt * 4); this.vel.z += c * (C.superGlideSpeed - hs) * Math.min(1, dt * 4); }
+    this.glidePulse = (this.glidePulse || 0) - dt;
+    if (Math.random() < 0.8) this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.8, 0)), Math.random() < 0.5 ? 0xff7ad9 : 0xffe14d, 2, 4);
+    if (this.glidePulse > 0) return;
+    this.glidePulse = 0.12;
+    const R = C.superGlideRadius, en = this.game.enemies;
+    const gy = this.game.world.groundAt(this.pos.x, this.pos.z, this.pos.y);
+    for (const e of en.list) {
+      if (!e.alive || e.dying > 0) continue;
+      const dx = e.pos.x - this.pos.x, dz = e.pos.z - this.pos.z;
+      if (dx * dx + dz * dz > R * R || e.pos.y > this.pos.y + 6 || e.pos.y < gy - 6) continue;
+      if (e.T.static) en.hit(e, 1, this.pos);
+      else if (en.hit(e, C.superGlideDamage, this.pos.clone().setY(e.pos.y), 22, true)) this.onKill();
+    }
+    const B = this.game.boss; if (B?.targetable && Math.hypot(B.pos.x - this.pos.x, B.pos.z - this.pos.z) < R + B.R && B.pos.y > gy - 6) B.damage(1, this);
+    // 지나가는 땅이 초토화: 폭발이 연달아 터지고, 나무·바위·벽이 부서짐
+    const ground = this.pos.clone().setY(gy);
+    this.smashAround(ground, R * 0.8);
+    for (const w of this.game.world.walls) { if (w.dead) continue; const c = w.min.clone().add(w.max).multiplyScalar(0.5); if (Math.hypot(c.x - ground.x, c.z - ground.z) < R) this.breakWall(w); }
+    const side = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    for (const k of [-1, 0, 1]) {
+      const p = ground.clone().addScaledVector(side, k * R * 0.55 + (Math.random() - 0.5) * 4);
+      p.y = this.game.world.groundAt(p.x, p.z, gy + 5) + 0.4;
+      if (k === 0 || Math.random() < 0.7) this.game.fx.explosion(p, 0.9 + Math.random() * 0.5);
+      this.game.fx.burst(p, [0xff5a10, 0xffb020, 0x5a4a3a][(Math.random() * 3) | 0], 8, 12);
+    }
+    this.game.fx.shockwave(ground, R, 0xff7ad9);
+    if (Math.random() < 0.35) SFX.explosion();
+    this.shake = Math.max(this.shake, 0.35);
+  }
+
+  // 파워형 슈퍼 펀치: 주먹 방향으로 넓게 퍼지며 70m까지 쾅!
+  superPunch() {
+    const C = CFG.power;
+    this.punchT = 0.45; this.superPunchCD = C.superPunchCooldown;
+    const fwd = new THREE.Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
+    const o = this.pos.clone().add(new THREE.Vector3(0, 1, 0)), cosA = Math.cos(C.superPunchAngle);
+    const inCone = (p, extra = 0) => { const d = p.clone().sub(o); const dy = d.y; d.y = 0; const l = d.length(); return l < C.superPunchRange + extra && Math.abs(dy) < 25 && (l < 3 || d.dot(fwd) / l > cosA); };
+    const en = this.game.enemies;
+    for (const e of en.list) {
+      if (!e.alive || e.dying > 0 || !inCone(e.pos)) continue;
+      if (e.T.static) en.hit(e, 1, this.pos);
+      else if (en.hit(e, C.superPunchDamage, this.pos, 30, true)) this.onKill();
+    }
+    const B = this.game.boss; if (B?.targetable && inCone(B.pos, B.R)) B.damage(2, this);
+    for (let d = 4; d < 45; d += 6) this.smashAround(o.clone().addScaledVector(fwd, d).setY(this.pos.y), 3 + d * 0.25);
+    for (const w of this.game.world.walls) { if (w.dead) continue; const c = w.min.clone().add(w.max).multiplyScalar(0.5); if (inCone(c)) this.breakWall(w); }
+    this.game.fx.coneBlast(o, fwd, C.superPunchRange, C.superPunchAngle);
+    this.game.hud.flash('rgba(255,200,80,0.55)');
+    SFX.punch(); SFX.explosion();
+    this.shake = 0.8;
+    this.s = Math.max(this.s, 4);
   }
 
   // ---------------- 순간이동형 ----------------
@@ -823,7 +882,9 @@ export class Player {
       this.vel.y -= grav * dt;
       if (this.flying) this.vel.y = Math.max(this.vel.y, -F.fallSpeed); // 서서히 내려옴
       if (this.gliding) this.vel.y = Math.max(this.vel.y, -CFG.power.glideFall);
-      const tgtBase = this.gliding ? CFG.power.glideSpeed * this.mul() : this.flying ? this.cap(2) : this.maxSpeed() * 0.75;
+      const superGlide = this.gliding && this.superOn;
+      const tgtBase = superGlide ? CFG.power.superGlideSpeed : this.gliding ? CFG.power.glideSpeed * this.mul() : this.flying ? this.cap(2) : this.maxSpeed() * 0.75;
+      if (superGlide) this.superGlideTick(dt);
       if (hasMove) {
         const hs = Math.hypot(this.vel.x, this.vel.z);
         const tgt = Math.max(hs, tgtBase);

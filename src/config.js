@@ -50,7 +50,9 @@ export const CFG = {
   },
   // 비행형: 점프 연타할수록 헬리콥터처럼 더 빠르게 올라감, 안 누르면 천천히 내려오며 게이지 회복, 한 번에 최대 maxTime초
   flyer: { flapAdd: 6.5, maxRise: 26, gaugeMax: 100, flapCost: 4, regenPerSec: 14, maxTime: 20, fallSpeed: 3.2, gravityMul: 0.35, tornadoCooldown: 3, tornadoSpeed: 34 },
-  power: { glideFall: 3.5, glideSpeed: 16, punchRange: 3.4 },
+  power: { glideFall: 3.5, glideSpeed: 16, punchRange: 3.4,
+    superPunchRange: 70, superPunchAngle: 0.6, superPunchDamage: 12, superPunchCooldown: 0.9, // 슈퍼 펀치: 앞쪽 넓은 부채꼴(약 ±35도) 70m
+    superGlideSpeed: 62, superGlideRadius: 18, superGlideDamage: 10 }, // 슈퍼 활강: 아주 빠르게, 지나가는 곳 아래 13m 범위 공격
   blink: { range: 30, energyRadius: 5.5, returnInvuln: 1.0, ultHold: 0.8, ultPullRange: 70, ultDamage: 14, ultCooldown: 10, ultRange: 80, ultRingCost: 0.1 },
   rings: {
     respawn: 30,          // 먹은 링이 다시 생기는 시간(초)

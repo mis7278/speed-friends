@@ -133,6 +133,30 @@ export class Effects {
     }
   }
 
+  // 파워형 슈퍼 펀치: 앞으로 넓게 퍼지는 부채꼴 충격파
+  coneBlast(o, dir, len, half) {
+    const yaw = Math.atan2(dir.x, dir.z);
+    const mk = (color, op) => {
+      const geo = new THREE.CircleGeometry(1, 24, Math.PI / 2 - half, half * 2);
+      geo.rotateX(-Math.PI / 2);
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }));
+      m.position.copy(o).setY(o.y - 0.6); m.rotation.y = yaw + Math.PI; this.scene.add(m);
+      return m;
+    };
+    const a = mk(0xffd040, 0.75), b = mk(0xff5a20, 0.6);
+    b.position.y += 0.3;
+    this.specials.push({ kind: 'cone', g: a, g2: b, life: 0.6, max: 0.6, len });
+    for (let d = 6; d <= len; d += 7) {
+      const spread = Math.tan(half) * d * 0.8;
+      for (let k = 0; k < 2; k++) {
+        const side = (Math.random() - 0.5) * 2 * spread, p = o.clone().addScaledVector(dir, d).add(new THREE.Vector3(dir.z * side, 0, -dir.x * side));
+        this.burst(p, [0xffd040, 0xff7a20, 0xffffff][k % 3], 4, 9);
+      }
+      if (d % 21 === 6) this.shockwave(o.clone().addScaledVector(dir, d).setY(o.y - 0.7), 6 + d * 0.12, 0xffc040);
+    }
+    this.explosion(o.clone().addScaledVector(dir, 4), 1.2);
+  }
+
   // 큰 폭발 (보스)
   explosion(pos, size = 1) {
     this.burst(pos, 0xffa020, 20, 12 * size);
@@ -200,6 +224,11 @@ export class Effects {
         if (s.t <= 0) { s.t = 0.07; this._makeBolts(s); }
         s.mat.opacity = Math.min(1, s.life / s.max * 1.6) * (0.6 + Math.random() * 0.4);
         if (s.life <= 0) { for (const c of s.g.children) c.geometry.dispose(); s.mat.dispose(); }
+      } else if (s.kind === 'cone') {
+        const k = 1 - s.life / s.max, r = s.len * Math.min(1, k * 2.2);
+        s.g.scale.set(r, 1, r); s.g2.scale.set(r * 0.85, 1, r * 0.85);
+        s.g.material.opacity = 0.75 * (1 - k); s.g2.material.opacity = 0.6 * (1 - k);
+        if (s.life <= 0) { this.scene.remove(s.g2); s.g.geometry.dispose(); s.g2.geometry.dispose(); s.g.material.dispose(); s.g2.material.dispose(); }
       } else if (s.kind === 'boom') {
         const k = 1 - s.life / s.max;
         s.g.scale.setScalar((1 + k * 6) * s.size);
