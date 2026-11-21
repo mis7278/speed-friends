@@ -8,7 +8,7 @@ function slotLabel(s) {
   if (!s.data) return `<b>${s.slot}번</b> <span class="slot-empty">비어 있음</span>`;
   const d = s.data, dt = new Date(d.date);
   const when = `${dt.getMonth() + 1}/${dt.getDate()} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
-  return `<b>${s.slot}번</b> ${NAMES.stages[d.stage] || ''} · 퀘스트 ${Math.min(5, (d.quest || 0) + 1)}/5 · ${NAMES.characters[d.char] || ''}${d.hard ? ' · ⭐도전' : ''} <small>${when}</small>`;
+  return `<b>${s.slot}번</b> ${d.ngplus ? '<span class="ngp">새게임+</span> ' : ''}${NAMES.stages[d.stage] || ''} · 퀘스트 ${Math.min(5, (d.quest || 0) + 1)}/5 · ${NAMES.characters[d.char] || ''}${d.hard ? ' · ⭐어려움' : ''} <small>${when}</small>`;
 }
 
 export class PauseMenu {
@@ -58,7 +58,8 @@ export class PauseMenu {
     const btns = saves.map((s) => [slotLabel(s), () => {
       if (mode === 'save') {
         const doSave = () => { writeSave(s.slot, this.opts.getSaveData()); this.toast(`${s.slot}번 칸에 저장했어요! 💾`); this.slots('save'); };
-        s.data ? this.confirm(`${s.slot}번 칸에 덮어쓸까요?`, doSave, () => this.slots('save')) : doSave();
+        const warn = s.data?.ngplus ? `⚠️ ${s.slot}번 칸은 <b>새게임+</b> 칸이에요!<br>덮어쓰면 원래 새게임+ 시작 기록이 사라져요. 정말 덮어쓸까요?` : `⚠️ ${s.slot}번 칸에 이미 저장된 기록이 있어요.<br>덮어쓰면 원래 기록은 사라져요. 덮어쓸까요?`;
+        s.data ? this.confirm(warn, doSave, () => this.slots('save')) : doSave();
       } else if (s.data) this.confirm(`${s.slot}번 칸을 불러올까요?<br><small>지금 진행은 저장하지 않으면 사라져요</small>`, () => this.opts.onLoad(s.slot), () => this.slots('load'));
     }, 'pslot' + (s.data ? '' : ' empty')]);
     btns.push(['← 뒤로', () => this.main(), 'back']);

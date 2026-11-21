@@ -64,6 +64,12 @@ export class Boss {
     // 허리 톱니 고리
     this.ring = add(new THREE.TorusGeometry(4.3, 0.25, 6, 32), yellow, 0, -0.9, 0);
     this.ring.rotation.x = Math.PI / 2;
+    if (this.opts.variant === 'cannon') { // 얼음 나라 보스: 등에 거대한 대포
+      const piv = new THREE.Group(); piv.position.set(0, 3.2, -0.5); g.add(piv);
+      const barrel = new THREE.Mesh(cyl, toon(0x4a5266)); barrel.scale.set(1.6, 9, 1.6); barrel.rotation.x = Math.PI / 2 - 0.6; barrel.position.set(0, 2.4, 2.2); barrel.castShadow = true; piv.add(barrel);
+      for (const zz of [0.2, 3.5]) { const r = new THREE.Mesh(new THREE.TorusGeometry(1.75, 0.3, 6, 18), yellow); r.position.set(0, 1.0 + zz * 0.55, zz * 0.8 + 0.6); r.rotation.x = -0.6 + Math.PI / 2 - Math.PI / 2 + 0.95; piv.add(r); }
+      this.cannonPiv = piv;
+    }
     g.visible = false;
     this.mesh = g;
     this.game.scene.add(g);
@@ -124,7 +130,8 @@ export class Boss {
       this.atkTimer -= dt;
       if (this.atkTimer <= 0 && tgt) {
         const r = Math.random();
-        if (r < 0.35 && !this.mini) this.setState('missiles');
+        if (this.opts.variant === 'cannon' && r < 0.4) { this.setState('cannonAim'); this.shellAt = tgt.pos.clone(); SFX.warn(); }
+        else if (r < 0.35 && !this.mini) this.setState('missiles');
         else if (r < 0.7 || (this.mini && r < 0.55)) { this.setState('stompUp'); this.stompAt = tgt.pos.clone(); SFX.warn(); }
         else { this.setState('chargePrep'); SFX.warn(); }
         this.atkTimer = (3 + Math.random() * 2) / (this.game.hard ? CFG.hard.bossSpeed : 1);
@@ -135,6 +142,19 @@ export class Boss {
       const n = Math.floor(this.t / 0.3);
       if (n > (this.fired ?? -1) && n < 4 && tgt) { this.fired = n; this.fireMissile(tgt, n % 2 ? 1 : -1); }
       if (this.t > 1.6) { this.fired = -1; this.setState('chase'); }
+    } else if (this.state === 'cannonAim') { // 대포 조준: 빨간 원이 표시된 곳에 거대한 포탄이 떨어짐 (원 밖으로 피하기!)
+      face(tgt?.pos);
+      if (tgt && this.t < 1.0) this.shellAt.lerp(tgt.pos, Math.min(1, dt * 3));
+      const gy = ground(this.shellAt.x, this.shellAt.z);
+      this.warn.visible = true; this.warn.position.set(this.shellAt.x, gy + 0.2, this.shellAt.z); this.warn.scale.setScalar(1.5);
+      this.warn.material.opacity = 0.4 + Math.sin(time * 20) * 0.3;
+      this.pos.y += (hoverY - this.pos.y) * Math.min(1, dt * 3);
+      if (this.t > 1.6) {
+        const from = this.pos.clone().add(new THREE.Vector3(Math.sin(this.yaw) * 5, 9, Math.cos(this.yaw) * 5));
+        this.shell = { from, to: this.shellAt.clone().setY(gy), t: 0, mesh: this.shell?.mesh || new THREE.Mesh(new THREE.SphereGeometry(1.6, 12, 10), toon(0x2c3036)) };
+        this.game.scene.add(this.shell.mesh); this.game.fx.explosion(from, 1.2); SFX.explosion();
+        this.setState('chase');
+      }
     } else if (this.state === 'stompUp') {
       if (tgt && this.t < 1.3) this.stompAt.lerp(tgt.pos, Math.min(1, dt * 2));
       const gy = ground(this.stompAt.x, this.stompAt.z);
@@ -207,6 +227,17 @@ export class Boss {
     this.mesh.visible = this.invulnT > 0 ? Math.floor(time * 20) % 2 === 0 : true;
     if (this.state === 'dying') this.mesh.visible = true;
 
+    if (this.shell) { // 날아가는 포탄
+      const S = this.shell; S.t += dt / 1.1;
+      const k = Math.min(1, S.t);
+      S.mesh.position.lerpVectors(S.from, S.to, k); S.mesh.position.y += Math.sin(k * Math.PI) * 30;
+      if (k >= 1) {
+        this.game.fx.explosion(S.to.clone().setY(S.to.y + 1), 2.2); this.game.fx.shockwave(S.to, 12, 0xff8a30); SFX.explosion();
+        for (const p of this.game.players) { if (p.alive && Math.hypot(p.pos.x - S.to.x, p.pos.z - S.to.z) < 9 && p.pos.y < S.to.y + 6) p.hurt(S.to, 1.5); p.shake = Math.max(p.shake, 0.5); }
+        this.game.scene.remove(S.mesh); this.shell = null; this.warn.visible = false; this.warn.scale.setScalar(1);
+      }
+    }
+    if (this.cannonPiv) this.cannonPiv.rotation.y = Math.sin(time * 0.7) * 0.15;
     this.updateMissiles(dt, tgt);
     this.updateWaves(dt);
     this.contact();
@@ -307,5 +338,6 @@ export class Boss {
     this.game.scene.remove(this.mesh, this.warn);
     for (const m of this.missiles) this.game.scene.remove(m.m);
     for (const w of this.waves) this.game.scene.remove(w.m);
+    if (this.shell) this.game.scene.remove(this.shell.mesh);
   }
 }

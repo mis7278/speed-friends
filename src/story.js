@@ -98,3 +98,36 @@ export const LINES = {
 };
 // 혼자 할 때 무전으로 도와주는 친구
 export const RADIO_FRIEND = { speed: 'flyer', flyer: 'speed', power: 'speed', blink: 'flyer' };
+
+// ---- 이야기 장면용 탈것 ----
+const _m = (geo, mat, x, y, z, sx = 1, sy = 1, sz = 1, parent) => { const o = new THREE.Mesh(geo, mat); o.position.set(x, y, z); o.scale.set(sx, sy, sz); o.castShadow = true; parent.add(o); return o; };
+const _glow = (c, o = 1) => new THREE.MeshBasicMaterial({ color: c, toneMapped: false, transparent: o < 1, opacity: o });
+// 주인공이 타는 작은 우주선 (하늘 도시 → 거대 우주선)
+export function makeShuttle() {
+  const g = new THREE.Group(), sph = new THREE.SphereGeometry(1, 18, 12), box = new THREE.BoxGeometry(1, 1, 1), cone = new THREE.ConeGeometry(1, 1, 12);
+  _m(sph, toon(0xf4f4f0), 0, 0, 0, 2.2, 1.6, 4.2, g);
+  _m(sph, _glow(0x7fd8ff, 0.7), 0, 0.9, 1.2, 1.3, 0.9, 1.8, g);
+  for (const s of [-1, 1]) { _m(box, toon(0x3a6fd0), s * 2.6, -0.3, -0.8, 3, 0.25, 2.2, g); _m(box, toon(0xffc233), s * 3.9, -0.3, -0.8, 0.3, 0.6, 2.2, g); }
+  const f = _m(cone, _glow(0x66ccff, 0.85), 0, 0, -5, 1, 2.5, 1, g); f.rotation.x = -Math.PI / 2;
+  g.userData.flame = f;
+  return g;
+}
+// 닥터 기어가 타고 도망치는 작은 비행접시
+export function makeGearPod() {
+  const g = new THREE.Group(), sph = new THREE.SphereGeometry(1, 20, 12), cyl = new THREE.CylinderGeometry(1, 1, 1, 20);
+  _m(sph, toon(0x6a4a9a), 0, 0, 0, 4, 1.2, 4, g);
+  _m(cyl, toon(0xffc233), 0, 0, 0, 4.1, 0.3, 4.1, g);
+  _m(sph, _glow(0xb070ff, 0.5), 0, 1, 0, 1.8, 1.6, 1.8, g);
+  _m(sph, toon(0x6a4a9a), 0, 0.9, 0, 0.6, 0.9, 0.6, g); _m(sph, toon(0xf0f0f0), 0, 1.9, 0, 0.5, 0.5, 0.5, g); _m(sph, _glow(0xff3020), 0.18, 1.95, 0.42, 0.14, 0.14, 0.08, g);
+  for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2; _m(sph, _glow(0xff3020), Math.cos(a) * 3.6, -0.2, Math.sin(a) * 3.6, 0.3, 0.3, 0.3, g); }
+  return g;
+}
+// 닥터 기어의 최종 전함 (거대 우주선에서 도망칠 때)
+export function makeBattleship() {
+  const g = new THREE.Group(), sph = new THREE.SphereGeometry(1, 20, 14), box = new THREE.BoxGeometry(1, 1, 1), cone = new THREE.ConeGeometry(1, 1, 12);
+  _m(sph, toon(0x4a3a6a), 0, 0, 0, 14, 5, 20, g); _m(box, toon(0x2c3036), 0, -2, 0, 26, 2, 30, g);
+  for (const s of [-1, 1]) _m(box, toon(0x4a3a6a), s * 20, -1, -4, 18, 1.6, 12, g);
+  _m(sph, _glow(0x9a5aff, 0.55), 0, 4.5, 3, 5, 4, 5, g);
+  for (const x of [-8, 0, 8]) { const f = _m(cone, _glow(0x66ccff, 0.8), x, 0, -24, 2.2, 8, 2.2, g); f.rotation.x = -Math.PI / 2; }
+  return g;
+}

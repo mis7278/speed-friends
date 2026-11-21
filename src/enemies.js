@@ -181,6 +181,8 @@ function gunnerMesh() {
   g.userData.head = head; g.userData.lamp = lamp;
   return g;
 }
+// 이야기 장면용 로봇 모양 (용암 섬 탈출 장면 등)
+export function robotMesh(type) { return ({ beetle: soldierMesh, brute: bruteMesh, wasp: droneMesh, hopper: springMesh, gunner: gunnerMesh, tank: tankMesh })[type]?.() || soldierMesh(); }
 const CRITTER_OF = { beetle: 'bunny', crawler: 'bunny', tank: 'squirrel', wasp: 'bird', flyer: 'bird', hopper: 'frog', gunner: 'squirrel', brute: 'squirrel', titan: 'bird' };
 
 const TYPES = {
@@ -189,7 +191,8 @@ const TYPES = {
   beetle: { make: soldierMesh, hp: 3, armor: 0, radius: 0.8, speed: 1, color: 0xd8402a, size: 1.6 },
   crawler: { make: soldierMesh, hp: 3, armor: 0, radius: 0.8, speed: 1, color: 0xd8402a, size: 1.6 },
   brute: { make: bruteMesh, hp: 9, armor: 1, radius: 1.1, speed: 0.7, color: 0x5a6478, size: 1.9 },
-  titan: { make: bruteMesh, hp: 14, armor: 1, radius: 1.1, speed: 0.6, color: 0x5a6478, size: 5.0, big: true }, // 하늘 도시 끝을 지키는 거인 로봇 (크지만 보통 몬스터만큼 약함)
+  titan: { make: bruteMesh, hp: 14, armor: 1, radius: 1.1, speed: 0.6, color: 0x5a6478, size: 9.0, big: true }, // 아주 커서 멀리서도 '여기가 끝'인 걸 알 수 있음
+  colossus: { make: bruteMesh, hp: 14, armor: 2, radius: 1.1, speed: 0.8, color: 0x6a4a9a, size: 3.2, big: true }, // 우주선(본거지)의 거대 로봇 // 하늘 도시 끝을 지키는 거인 로봇 (크지만 보통 몬스터만큼 약함)
   tank: { make: tankMesh, hp: 10, armor: 2, radius: 1.3, speed: 0.75, color: 0xc0652e, size: 1.7 },
   wasp: { make: droneMesh, hp: 2, armor: 0, radius: 1.0, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.7 },
   flyer: { make: droneMesh, hp: 2, armor: 0, radius: 1.0, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.7 },

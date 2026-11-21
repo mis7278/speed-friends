@@ -4,7 +4,7 @@ import { EffectComposer } from '../vendor/addons/postprocessing/EffectComposer.j
 import { RenderPass } from '../vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from '../vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
-import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES, snowAmount } from './world.js';
+import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES, snowAmount, vnoise } from './world.js';
 import { CFG } from './config.js';
 
 const NOISE_GLSL = `
@@ -110,7 +110,7 @@ export class Graphics {
     scene.add(this.sun, this.sun.target);
 
     this._sky();
-    this._clouds();
+    if (T.space) this._space(); else this._clouds();
     if (T.skyLand) this._lowClouds();
     this._water();
     if (T.grass) this._grass();
@@ -131,10 +131,10 @@ export class Graphics {
   _sky() {
     const T = this.T;
     this.skyMat = new THREE.ShaderMaterial({
-      uniforms: { top: { value: new THREE.Color(T.skyTop) }, horizon: { value: new THREE.Color(T.skyHorizon) }, bottom: { value: new THREE.Color(T.skyBottom) }, sunDir: { value: this.sunDir }, sunCol: { value: new THREE.Color(T.sun) }, time: { value: 0 } },
+      uniforms: { top: { value: new THREE.Color(T.skyTop) }, horizon: { value: new THREE.Color(T.skyHorizon) }, bottom: { value: new THREE.Color(T.skyBottom) }, sunDir: { value: this.sunDir }, sunCol: { value: new THREE.Color(T.sun) }, time: { value: 0 }, cloudAmt: { value: T.space ? 0 : 1 } },
       vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position); vec4 p = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position = p.xyww; }`,
       fragmentShader: `
-        uniform vec3 top, horizon, bottom, sunDir, sunCol; uniform float time; varying vec3 vDir;
+        uniform vec3 top, horizon, bottom, sunDir, sunCol; uniform float time, cloudAmt; varying vec3 vDir;
         ${NOISE_GLSL}
         void main(){
           vec3 d = normalize(vDir); float h = d.y;
@@ -146,7 +146,7 @@ export class Graphics {
             vec2 uv = d.xz / (h + 0.12) * 0.9 + vec2(time * 0.004, time * 0.002);
             float n = fbm(uv * 2.0);
             float c = smoothstep(0.52, 0.85, n) * smoothstep(0.0, 0.3, h);
-            col = mix(col, vec3(1.0, 0.99, 0.97) + sunCol * pow(sd, 6.0) * 0.3, c * 0.75);
+            col = mix(col, vec3(1.0, 0.99, 0.97) + sunCol * pow(sd, 6.0) * 0.3, c * 0.75 * cloudAmt);
           }
           gl_FragColor = vec4(col, 1.0);
           #include <tonemapping_fragment>
@@ -228,10 +228,39 @@ export class Graphics {
     });
     const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000, 1, 1), this.waterMat);
     water.rotation.x = -Math.PI / 2; water.position.y = T.frozen ? 0.02 : T.lava ? CFG.lava.level - 0.05 : -0.05;
-    water.visible = !T.skyLand; // 하늘 도시에는 물이 없음
+    water.visible = !T.skyLand && !T.space; // 하늘 도시·우주에는 물이 없음
     water.receiveShadow = false;
     this.scene.add(water);
     this.water = water;
+  }
+
+  // 우주: 별과 저 아래 지구 (거대 우주선·최후의 결전)
+  _space() {
+    const N = 2500, pos = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) { const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, r = Math.sqrt(1 - u * u); pos[i * 3] = Math.cos(a) * r * 90; pos[i * 3 + 1] = u * 90; pos[i * 3 + 2] = Math.sin(a) * r * 90; }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    this.stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xffffff, size: 1.6, sizeAttenuation: false, fog: false, depthWrite: false, toneMapped: false }));
+    this.stars.renderOrder = -9; this.stars.frustumCulled = false;
+    this.scene.add(this.stars);
+    // 지구: 바다·대륙·구름을 그림으로 만든 큰 공
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 256;
+    const c2 = cv.getContext('2d'), img = c2.createImageData(512, 256);
+    for (let j = 0; j < 256; j++) for (let i = 0; i < 512; i++) {
+      const lon = i / 512 * 16, lat = j / 256 * 8, n = vnoise(lon, lat) * 0.6 + vnoise(lon * 2.3 + 5, lat * 2.3) * 0.4, cl = vnoise(lon * 3 + 9, lat * 4 - 3);
+      const pole = Math.abs(j / 256 - 0.5) > 0.42;
+      let r = 30, gg = 90, b = 200;
+      if (n > 0.55) { r = 70 + n * 60; gg = 140 + n * 40; b = 60; if (n > 0.72) { r = 160; gg = 140; b = 90; } }
+      if (pole) { r = gg = b = 240; }
+      if (cl > 0.62) { const k = Math.min(1, (cl - 0.62) * 4); r += (255 - r) * k; gg += (255 - gg) * k; b += (255 - b) * k; }
+      const k = (j * 512 + i) * 4; img.data[k] = r; img.data[k + 1] = gg; img.data[k + 2] = b; img.data[k + 3] = 255;
+    }
+    c2.putImageData(img, 0, 0);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+    this.earth = new THREE.Mesh(new THREE.SphereGeometry(2400, 48, 24), new THREE.MeshLambertMaterial({ map: tex, fog: false, emissive: 0x0a1a40 }));
+    const atm = new THREE.Mesh(new THREE.SphereGeometry(2480, 48, 24), new THREE.MeshBasicMaterial({ color: 0x6ab8ff, transparent: true, opacity: 0.18, fog: false, side: THREE.BackSide, depthWrite: false }));
+    this.earth.add(atm);
+    this.earthOffset = new THREE.Vector3(0, this.T.shipLand ? -3700 : -4400, 0);
+    this.scene.add(this.earth);
   }
 
   // 하늘 도시: 구멍 아래와 땅 끝 너머에 깔린 푹신한 구름 (움직이지 않음)
@@ -389,15 +418,18 @@ export class Graphics {
     this.sun.position.copy(focus).addScaledVector(this.sunDir, 250);
     this.sun.target.position.copy(focus);
     this.sky.position.copy(this.camera.position);
+    if (this.stars) this.stars.position.copy(this.camera.position);
+    if (this.earth) { this.earth.position.set(this.camera.position.x, 0, this.camera.position.z).add(this.earthOffset); this.earth.rotation.y = time * 0.004; }
     this.skyMat.uniforms.time.value = time;
     this.waterMat.uniforms.time.value = time;
     // 구름
     const drift = time * 3;
+    if (this.cloudBase) 
     this.cloudBase.forEach((c, i) => {
       let x = c[0] + drift; x = ((x + 3600) % 7200 + 7200) % 7200 - 3600;
       this.clouds.set(i, x, c[1], c[2], c[3], 1, 1, 1, 0.9);
     });
-    this.clouds.flush();
+    if (this.clouds) this.clouds.flush();
     if (this.gw) {
       const G = this.gw;
       if (G.job) this._grassWindow(0, 0, this.mobile ? 10 : 16);

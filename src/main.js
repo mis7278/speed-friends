@@ -16,9 +16,11 @@ import { CameraRig } from './camera.js';
 import { Boss } from './boss.js';
 import { CHARACTER_DEFS } from './character.js';
 import { Cinematic, V } from './cinematic.js';
-import { Scientist, GearHologram, LINES, RADIO_FRIEND } from './story.js';
-import { loadProgress, recoverCrystal, BIG_CRYSTALS, markReached } from './progress.js';
-import { readSave, hasAnySave } from './save.js';
+import { Scientist, GearHologram, LINES, RADIO_FRIEND, makeShuttle, makeGearPod, makeBattleship } from './story.js';
+import { loadProgress, recoverCrystal, BIG_CRYSTALS, markReached, addHullHole, resetForNewGamePlus, markFinalClear } from './progress.js';
+import { readSave, hasAnySave, makeNewGamePlusSlot } from './save.js';
+import { Shmup } from './shmup.js';
+import { robotMesh } from './enemies.js';
 import { PauseMenu, showLoadList } from './menu.js';
 import { Guardians } from './guardian.js';
 import { Net, P_COLORS } from './net.js';
@@ -37,6 +39,8 @@ const STAGES = [ // 6스테이지까지 예정 (5·6은 준비 중)
   { theme: 'ice', place: '얼음 나라', big: '얼어붙은 대공장' },
   { theme: 'lava', place: '용암 섬', big: '불타는 대공장' },
   { theme: 'sky', place: '하늘 도시', big: '구름 위 대공장' },
+  { theme: 'ship', place: '우주 요새', big: '중앙 동력실' },
+  { theme: 'space', place: '최후의 결전', big: '' },
 ];
 const params = new URLSearchParams(location.search);
 const stageIdx = Math.min(STAGES.length - 1, Math.max(0, parseInt(params.get('stage') || '0', 10) || 0));
@@ -63,6 +67,9 @@ const isTouch = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in win
 const loadSlot = parseInt(params.get('load') || '0', 10);
 const LOAD = loadSlot ? readSave(loadSlot) : null;
 const game = { time: 0, freezeT: 0, players: [], hard: LOAD ? !!LOAD.hard : !!(stageIdx > 0 && carry?.hard) };
+game.ngplus = LOAD ? !!LOAD.ngplus : !!(stageIdx > 0 && carry?.ngplus); // 새게임+: 크리스탈을 모두 가진 채, 훨씬 어렵게
+if (LOAD?.ngFresh) resetForNewGamePlus(); // 새게임+를 처음 시작: 우주선 외벽 구멍 등 완전 초기화
+if (game.ngplus) for (const k of ['enemyHp', 'enemySpeed', 'damage', 'bossHp', 'bossSpeed']) CFG.hard[k] *= 1.25;
 window.__game = game; // 테스트용
 
 setTimeout(boot, 60); // 로딩 화면이 먼저 보이도록
@@ -78,7 +85,7 @@ function boot() {
   const scaleCount = (base) => Math.round(base * (1 + 0.75 * (playerCount - 1)));
 
   game.input = new Input(renderer.domElement);
-  game.world = new World(scene, STAGE.theme, { mobile: isTouch });
+  game.world = new World(scene, STAGE.theme, { mobile: isTouch, hullHoles: loadProgress().hullHoles });
   game.world.stream(game.world.spawn.pos, 0, true); // 시작 지점 주변 미리 만들기
   game.gfx = new Graphics(renderer, scene, camera, game.world, isTouch);
   game.fx = new Effects(scene, game);
@@ -135,7 +142,7 @@ function boot() {
   const reached = markReached(stageIdx);
   let stageSel = stageIdx;
   const goStage = (i, stay = false) => { // stay: 그 대지의 시작 화면에서 멈춤 / 아니면 바로 시작
-    try { sessionStorage.setItem('sf-carry', JSON.stringify({ char: pl.kind, hearts: pl.storedHearts, hard: game.hard, pick: stay })); if (!stay) sessionStorage.setItem('sf-autostart', '1'); } catch (e) {}
+    try { sessionStorage.setItem('sf-carry', JSON.stringify({ char: pl.kind, hearts: pl.storedHearts, hard: game.hard, ngplus: game.ngplus, pick: stay })); if (!stay) sessionStorage.setItem('sf-autostart', '1'); } catch (e) {}
     location.href = `?stage=${i}`;
   };
   // ---- 같이 하기: 방 만들기 → 대기실(들어온 친구 보기, 캐릭터 고르기) → 방장이 시작 ----
@@ -164,7 +171,9 @@ function boot() {
     else if (m.t === 'ch') { const c = W.chests[m.i | 0]; if (c && !c.opened) { c.opened = true; const b = W.beacons.find((x) => x.name === c.name); if (b) b.found = true; game.hud.toast(`🎁 친구가 「${c.name}」 보물 상자를 열었어요!`); } }
     else if (m.t === 'bh') game.boss?.damage(+m.n || 1, null, true);
     else if (m.t === 'sn') W.meltSnow(new THREE.Vector3(+m.x || 0, 0, +m.z || 0), Math.min(40, +m.r || 0)); // 친구가 녹인 눈
-    else if (m.t === 'ex') launchExit(true);                                                               // 친구가 대포·분출구를 탐 → 다 같이
+    else if (m.t === 'ex') launchExit(true);
+    else if (m.t === 'hh') { const h = W.breakHull?.(+m.a || 0, +m.y || 0); if (h) { addHullHole(h); game.fx.explosion(V(Math.cos(h.a) * CFG.world.barrierR, h.y + 1.5, Math.sin(h.a) * CFG.world.barrierR), 1.5); } }
+    else if ((m.t === 'sx' || m.t === 'sd') && game.shmup) { if (m.t === 'sx' && !game.shmup.active && started) { if (cine.active) cine.skip(); game.shmup.start(+m.tm || 0); } game.shmup.onNet(m); }                                                               // 친구가 대포·분출구를 탐 → 다 같이
     else if (m.t === 'ep' && !net.host && Array.isArray(m.a)) {
       for (let k = 0; k + 4 < m.a.length; k += 5) {
         const e = E.list[m.a[k] | 0]; if (!e || e.T.static) continue;
@@ -240,18 +249,22 @@ function boot() {
 
   // ---- 이야기 대사 (docs/스토리.md 기준) ----
   // 대지의 크리스탈은 각 대지 한가운데 땅속 깊이 잠들어 있음 → 기어 군단이 굴착기로 파내서 관을 꽂아 힘을 뽑아 감
-  const CRY = BIG_CRYSTALS[stageIdx].name, EMP = NAMES.empire;
+  const CRY = BIG_CRYSTALS[Math.min(stageIdx, BIG_CRYSTALS.length - 1)].name, EMP = NAMES.empire;
   const nm = (k) => NAMES.characters[k];
   const friendKind = () => RADIO_FRIEND[pl.kind];
   const radio = () => `${nm(friendKind())} (무전):`;
   const me = () => `${nm(pl.kind)}:`;
+  const COMMON_CER = ['그때, 거대한 크리스탈이 환하게 빛나며 점점 작아지기 시작해요...', '자격이 있는 자여... 그대에게 크리스탈 수호자의 직분을 맡기노라. 이제 그대가 나를 지켜 다오.', `${CRY}이(가) 작은 보석이 되어 손에 내려앉았어요. 이제 ${CRY}의 수호자예요!`];
   const COMMON = { // 2스테이지부터 퀘스트 2~5 공통 대사 (장소 이름만 바뀜)
     q2: ['또 왔냐?! 공장은 또 만들면 그만이라고!', '저 공장에 동물 친구들이 갇혀 있어요!', '공장 안 친구들을 구하고 생산 기계를 멈추자!'],
     q3: [`렌치! ${STAGE.big}을 가동해라!`, '네, 넵! 기어님!', `${STAGE.big}이 빼앗은 크리스탈의 힘으로 더 강한 로봇을 만들고 있어요!`, '쳐들어가자!'],
     flee: ['으악! 또야?! 기어님께 혼나겠어~!', `${SCI}가 또 도망쳐요!`],
     q4: `${SCI}가 연구소로 숨었어요.`,
+    // 크리스탈 수호자: 스테이지를 깨면 거대한 크리스탈이 작은 보석이 되어 주인공에게
+    cer: ['그때, 거대한 크리스탈이 환하게 빛나며 점점 작아지기 시작해요...', '자격이 있는 자여... 그대에게 크리스탈 수호자의 직분을 맡기노라. 이제 그대가 나를 지켜 다오.', `${CRY}이(가) 작은 보석이 되어 손에 내려앉았어요. 이제 ${CRY}의 수호자예요!`],
     boss: ['이번엔 다를걸? 크리스탈의 힘을 가득 채웠다고!', '하늘에서 거대한 로봇이 내려왔어요!', `${NAMES.finalBoss}, 출동!`, '충격파는 점프로 피하고, 주저앉아 핵이 빛날 때 공격!'],
   };
+  const ME = nm(pl.kind);
   const STORY = [
     { // 1. 숲
       intro: [
@@ -269,6 +282,7 @@ function boot() {
       flee: ['으악! 내 대공장이...! 기어님께 혼나겠어~!', `${SCI}가 보라 늪 쪽으로 허둥지둥 도망쳐요!`],
       q4: '보라 늪 한가운데의 과학 연구소. 빼앗은 크리스탈의 힘이 저기 모이고 있어요.',
       boss: ['여기까지 쫓아오다니! 하지만 크리스탈의 힘을 가득 채운 내 최고 걸작을 보면 깜짝 놀랄걸?', '하늘에서 거대한 로봇이 내려왔어요!', `${NAMES.finalBoss}, 출동! 기어님께 칭찬받을 테다!`, '보스는 숲 어디든 쫓아와요! 충격파는 점프로 피하고, 주저앉아 핵이 빛날 때 공격!'],
+      cer: COMMON_CER,
       end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 크리스탈의 힘이 ${CRY}(으)로 돌아가요!`, `관이 모두 끊어지고 ${CRY}이(가) 다시 환하게 빛나요. 숲에 풍요가 돌아왔어요!`, '으아앙! 기어님께 이를 거야~!', '숲을 둘러싼 기계들도 무너져 내려요!', '크윽...! 숲 하나쯤 줘 버리지! 얼음 나라의 크리스탈은 이미 내 손 안에 있다! 와하하!', '얼음 나라가 위험해! 북쪽 눈길을 따라 얼음 나라로 가자!'],
     },
     { // 2. 얼음 나라: 장벽보다 높은 얼음산 꼭대기에서 뛰어내리며 시작
@@ -281,23 +295,26 @@ function boot() {
         '조심해! 얼음산은 장벽보다 높아서 엉뚱한 쪽으로 뛰면 장벽 밖으로 떨어질 수 있어!',
       ],
       ...COMMON,
-      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, '눈 덮인 얼음 나라가 다시 반짝반짝 빛나요!', '으아앙~! 또 졌어!', '얼음 나라를 둘러싼 기계들이 무너져요!', '흥! 다음은 용암 섬이다! 끝없는 용암 바다 한가운데라서 아무도 못 올걸? 와하하!', '대지 한가운데의 거대 대포에 들어가면 용암 섬까지 날아갈 수 있어! 가자!'],
+      boss: ['이번엔 다를걸? 내 거대 대포 맛 좀 봐라!', '하늘에서 거대 대포를 등에 멘 로봇이 내려왔어요!', `${NAMES.finalBoss}, 대포 발사 준비!`, '빨간 원이 보이면 포탄이 떨어져요! 원 밖으로 피하고, 주저앉아 핵이 빛날 때 공격!'],
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, '', '으아앙~! 내 대포까지 두고 가야 하다니!', '얼음 나라를 둘러싼 기계들이 무너져요!', '흥! 다음은 용암 섬이다! 끝없는 용암 바다 한가운데라서 아무도 못 올걸? 와하하!', ''],
+      collapse: ['쿠구구궁...! 크리스탈이 떠나자 얼음 나라가 무너지기 시작해요!', `렌치 박사가 쓰던 거대 대포가 남아 있어! 저걸 타고 탈출하자!`],
     },
     { // 3. 용암 섬: 대포를 타고 날아와 떨어지며 시작 (벽 없음, 용암에 빠지면 링 30% 잃음)
       intro: [
-        '거대 대포에서 슝~! 하늘을 가로질러 날아간 곳은...',
-        '끝없는 용암 바다 한가운데에 떠 있는 용암 섬! 이곳엔 벽이 없는 대신, 섬 밖은 온통 용암이에요.',
-        `섬 한가운데에서도 굴착기가 ${CRY}을(를) 파내 힘을 뽑아 가고 있어요!`,
-        '와하하! 뜨거운 맛 좀 봐라! 용암에 빠지면 링을 잃고 처음부터다!',
+        '무너지는 얼음 나라에서 거대 대포로 슝~! 하늘을 가로질러 날아간 곳은...',
+        '끝없는 용암 바다 한가운데에 떠 있는 용암 섬! 살아 있는 것은 아무것도 없는 뜨거운 땅이에요. 벽이 없는 대신, 섬 밖은 온통 용암!',
+        `섬 한가운데에는 모든 것을 부술 수 있는 힘을 가진 ${CRY}이(가) 잠들어 있었어요. 굴착기가 그것을 파내고 있어요!`,
+        `와하하! ${CRY}의 힘만 있으면 무엇이든 부숴 버릴 수 있다! 용암에 빠지면 링을 잃고 처음부터다!`,
         '앗 뜨거! 용암은 조심조심 피해서 달리자!',
         '먼저 로봇 기지의 안테나 탑부터 부수자!',
       ],
       ...COMMON,
-      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, `${CRY}이(가) 다시 따뜻하게 빛나요. 섬에 생명이 돌아왔어요!`, '으아앙~! 뜨거워!', '섬을 덮던 검은 연기가 걷혀요!', '크으윽! 하지만 하늘 도시는 절대 못 올 거다! 구름 위에 있으니까! 와하하!', '섬 한가운데의 용암 분출구를 타면 하늘까지 솟구칠 수 있어! 가자!'],
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, '', '으아앙~! 뜨거워! 기어님~!', '', '크으윽! 하지만 하늘 기지는 절대 못 올 거다! 구름 위에 있으니까! 와하하!', ''],
+      escape: ['콰르르릉!!! 크리스탈이 떠나자 용암 섬이 폭발하기 시작해요!', '로봇 군단이 모두 하늘로 도망쳐요!', `${'${ME}'}이(가) 날아오르는 로봇을 꽉 붙잡았어요!`, '꽉 잡아! 이대로 저 로봇들의 하늘 기지까지 따라가자!'],
     },
     { // 4. 하늘 도시: 분출구를 타고 구름을 뚫고 솟아오르며 시작 (구멍 아래 구름은 푹신, 끝 너머는 낭떠러지)
       intro: [
-        '용암 분출구를 타고 구름을 뚫고 솟아오르자... 하늘 위에 떠 있는 기계 도시가 나타났어요!',
+        '도망치는 로봇에 매달려 구름을 뚫고 올라가자... 하늘 위에 떠 있는 기어 군단의 하늘 기지가 나타났어요!',
         '땅 곳곳에 구멍이 뚫려 있어요. 떨어져도 푹신한 구름이 튕겨 줘요. 세 번 연달아 밟으면 땅 위까지 높이 튀어 올라요!',
         '하지만 도시 끝 너머로 나가면 끝없이 떨어져 버려요! 끝은 거인 로봇들이 지키고 있어요.',
         `도시 한가운데에서도 굴착기가 ${CRY}을(를) 파내고 있어요!`,
@@ -306,14 +323,44 @@ function boot() {
         '먼저 로봇 기지의 안테나 탑부터 부수자!',
       ],
       ...COMMON,
-      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, `${CRY}이(가) 다시 황금빛으로 빛나요!`, '으아앙~! 기어님~!', '하늘 도시의 빨간 경고등이 모두 꺼져요!', '크윽...! 아직 끝나지 않았다! 다음 대지에서 보자! 와하하!', '다음 이야기는 아직 만드는 중이에요. 자유롭게 하늘 도시를 달려 보세요!'],
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, '', '으아앙~! 기어님~!', '', '크윽...! 진짜 본거지에서 보자! 우주에서 기다리마! 와하하!', ''],
+      escape: [`${VIL}이(가) 작은 비행접시를 타고 하늘 위로 도망쳐요!`, `${'${ME}'}이(가) 기지에 있던 작은 우주선에 뛰어올랐어요!`, '놓칠 줄 알고? 우주까지 쫓아가자!'],
+    },
+    { // 5. 우주 요새: 맵 전체가 닥터 기어의 거대 우주선 (진짜 본거지)
+      intro: [
+        '작은 우주선을 타고 하늘 너머 우주로... 그곳엔 상상도 못 할 만큼 거대한 우주선이 떠 있었어요!',
+        '작은 우주선이 거대 우주선의 격납고에 철컥! 도킹했어요. 여기가 바로 기어 제국의 진짜 본거지!',
+        `이 우주선의 한가운데에는 우주를 만드는 힘을 가진 ${CRY}이(가) 있어요. 기어는 이미 그것을 훔쳐 우주선의 동력으로 쓰고 있어요!`,
+        `와하하! 여기까지 오다니! 하지만 이곳은 내 본거지! 가장 크고 강한 로봇들이 기다리고 있다!`,
+        '벽 너머는 우주야... 그래도 겁 안 나! 가자!',
+        '조심해! 우주선 외벽에 구멍을 뚫으면 바깥은 진짜 우주야. 떨어지면 지구까지 떨어져!',
+      ],
+      ...COMMON,
+      end: [`${NAMES.finalBoss}가 쓰러지자, 우주선의 동력이 꺼지고 ${CRY}이(가) 풀려나요!`, '', '으아앙~! 본거지가...!', '', '와하하! 아직 끝나지 않았다! 내 최종 전함이 남아 있다!', ''],
+      escape: [`${VIL}이(가) 최종 전함을 타고 우주 저편으로 도망쳐요!`, '다섯 크리스탈의 힘이 모두 모였어요! 이제 언제든 슈퍼로 변신할 수 있어요!', '놓칠 줄 알고? 슈퍼 변신! 쫓아가자!'],
+    },
+    { // 6. 최후의 결전: 슈퍼 상태로 우주를 날며 싸움
+      intro: [
+        '슈퍼 상태로 빛나며 우주를 날아, 닥터 기어의 최종 전함을 쫓아가요!',
+        `와하하! 여기까지 쫓아오다니! 내 함대가 너희를 기다리고 있다!`,
+        '날아오는 미사일을 피하면서 함대를 모두 물리치자! (A 대시 · B 오로라 · C 궁극기)',
+      ],
+      ending: [
+        '닥터 기어의 최종 전함이 불꽃을 내뿜으며 떨어지기 시작해요!',
+        '슈퍼 상태의 빛을 내며, 지구로 안전하게 돌아가요...',
+        '무사히 지구에 내려왔어요. 하늘을 올려다보니...',
+        '저 멀리 하늘에서 닥터 기어의 우주선이 연기를 내뿜으며 떨어지고 있어요!',
+        '으아아아~! 기억해라~! 다음엔 꼭... 꼬오옥...!',
+        '다섯 크리스탈의 수호자 덕분에, 세상에 다시 평화가 찾아왔어요. 끝!',
+      ],
     },
   ][stageIdx];
 
   // ---- 목소리 파일 이름표 (sounds/voice/아이디.mp3) ----
-  const WHO = { intro: [['narr', 'narr', 'narr', 'narr', 'narr', 'gear', 'narr', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'narr', 'gear', 'player', 'friend']][stageIdx],
+  const WHO = { intro: [['narr', 'narr', 'narr', 'narr', 'narr', 'gear', 'narr', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'gear', 'friend']][stageIdx],
+    cer: ['narr', 'crystal', 'narr'], collapse: ['narr', 'friend'], escape: ['narr', 'narr', 'narr', 'player'], ending: ['narr', 'narr', 'narr', 'narr', 'gear', 'narr'],
     q2: ['wrench', 'narr', 'friend'], q3: ['gear', 'wrench', 'narr', 'friend'],
-    flee: ['wrench', 'narr'], q4: ['narr'], boss: ['wrench', 'narr', 'wrench', 'narr'], end: ['narr', 'narr', 'wrench', 'narr', 'gear', stageIdx === 3 ? 'narr' : 'friend'] };
+    flee: ['wrench', 'narr'], q4: ['narr'], boss: ['wrench', 'narr', 'wrench', 'narr'], end: ['narr', 'narr', 'wrench', 'narr', 'gear', 'friend'] };
   const VOICE = new Map(), voiceList = [];
   const regVoice = (id, who, text) => { if (!VOICE.has(text)) { VOICE.set(text, { id, who }); voiceList.push({ id, who, text }); } };
   for (const [k, arr] of Object.entries(STORY)) (Array.isArray(arr) ? arr : [arr]).forEach((t, i) => regVoice(`s${stageIdx + 1}_${k}_${i + 1}`, (WHO[k] || [])[i] || 'narr', t));
@@ -352,7 +399,7 @@ function boot() {
   });
   const crystalOut = (text) => ({ ...treeShot(text), enter: () => { W.crystalState(2); SFX.crystal(); for (let i = 0; i < 3; i++) setTimeout(() => game.fx.burst(tree.clone().add(V(0, 6 + i * 3, 0)), BIG_CRYSTAL_HEX, 18, 10), i * 250); } });
 
-  const STAGE_DIRT = W.T.dirt, BIG_CRYSTAL_HEX = parseInt(BIG_CRYSTALS[stageIdx].color.slice(1), 16);
+  const STAGE_DIRT = W.T.dirt, BIG_CRYSTAL_HEX = parseInt(BIG_CRYSTALS[Math.min(stageIdx, BIG_CRYSTALS.length - 1)].color.slice(1), 16);
   const peak = V(ICE_PEAK.x, W.spawn.pos.y, ICE_PEAK.z);
   // ---- 퀘스트 (스토리 순서) ----
   const kills = {};
@@ -406,47 +453,52 @@ function boot() {
       done: () => (kills.lab || 0) >= q.need && Math.hypot(pl.pos.x - Tq.lab.x, pl.pos.z - Tq.lab.z) < 30,
       intro: () => [orbit(Tq.lab, 70, 30, 3.0, 2.2, 4.5, S.q4)] },
     { title: `최종 보스: ${NAMES.finalBoss}`, target: () => (game.boss?.alive ? game.boss.pos : null),
-      text: () => `${NAMES.finalBoss}를 물리쳐라! (주저앉아 핵이 빛날 때 공격)`,
+      text: () => stageIdx === 1 ? `${NAMES.finalBoss}를 물리쳐라! (빨간 원 = 포탄! 피하고, 핵이 빛날 때 공격)` : `${NAMES.finalBoss}를 물리쳐라! (주저앉아 핵이 빛날 때 공격)`,
       intro: () => {
         const pad = W.labPad;
         return [
           { from: { pos: pad.clone().add(V(0, 9, 16)), look: sci.pos.clone() }, to: { pos: pad.clone().add(V(4, 8, 13)), look: sci.pos.clone() }, dur: 3, who: `${SCI}:`, text: S.boss[0] },
           { from: { pos: pad.clone().add(V(0, 2, 34)), look: pad.clone().add(V(0, 40, 0)) }, to: { pos: pad.clone().add(V(8, 1.5, 28)), look: pad.clone().add(V(0, 8, 0)) }, dur: 3.5,
             text: S.boss[1],
-            enter: () => { game.boss = new Boss(game, { hpScale: 1 + 0.75 * (playerCount - 1), name: NAMES.finalBoss }); game.boss.spawnNear(pad, 0.01); sci.flyTo(pad.clone().add(V(0, 7, 14)), 1.5); } },
+            enter: () => { game.boss = new Boss(game, { hpScale: 1 + 0.75 * (playerCount - 1), name: NAMES.finalBoss, variant: stageIdx === 1 ? 'cannon' : null }); game.boss.spawnNear(pad, 0.01); sci.flyTo(pad.clone().add(V(0, 7, 14)), 1.5); } },
           { from: () => ({ pos: game.boss.pos.clone().add(V(10, 3, 16)), look: game.boss.pos.clone().add(V(0, 2, 0)) }), dur: 3,
             who: `${SCI}:`, text: S.boss[2], enter: () => sci.flyTo(game.boss.pos.clone().add(V(0, 2.5, 0)), 1.6) },
           { from: () => ({ pos: game.boss.pos.clone().add(V(-14, 4, 18)), look: game.boss.pos.clone() }), dur: 3, text: S.boss[3], enter: () => sci.hide() },
         ];
       },
-      introEnd: () => { holo.hide(); sci.hide(); if (!game.boss) { game.boss = new Boss(game, { name: NAMES.finalBoss }); game.boss.spawnNear(W.labPad, 0.01); } game.boss.opts.onDefeated = bossDefeated; },
+      introEnd: () => { holo.hide(); sci.hide(); if (!game.boss) { game.boss = new Boss(game, { name: NAMES.finalBoss, variant: stageIdx === 1 ? 'cannon' : null }); game.boss.spawnNear(W.labPad, 0.01); } game.boss.opts.onDefeated = bossDefeated; },
       done: () => game.boss?.done,
       outro: () => {
         const ang = Math.atan2(pl.pos.x, pl.pos.z);
         const bp = game.boss.pos.clone();
-        return [
+        const head = [
           { from: { pos: bp.clone().add(V(16, 6, 16)), look: bp }, dur: 3, text: S.end[0], enter: () => { sci.show(bp.clone().add(V(0, 3, 0))); } },
-          treeShot(S.end[1], null, { enter: () => { W.restoreTree(); SFX.crystal(); for (let i = 0; i < 4; i++) setTimeout(() => { game.fx.burst(tree.clone().add(V(0, 14 + i * 6, 0)), 0x9dff9a, 24, 12); game.fx.shockwave(tree.clone().add(V(0, 1, 0)), 14 + i * 6, 0x9dff9a); }, i * 350); } }),
           { from: () => ({ pos: sci.pos.clone().add(V(-10, 4, -10)), look: sci.pos.clone() }), dur: 3, who: `${SCI}:`, text: S.end[2],
             enter: () => { sci.show(bp.clone().add(V(0, 3, 0))); sci.flyTo(bp.clone().add(V(Math.sin(ang + Math.PI) * 300, 60, Math.cos(ang + Math.PI) * 300)), 4); } },
-          { ...barrierShot(ang, S.end[3]), enter: () => { sci.hide(); W.removeBarrier(); W.exitGlow?.material.color.set(0x3dff6a); } },
-          gearShot(ang + 0.6, S.end[4]),
-          hideHolo(playerShot(S.end[5], stageIdx < 3 ? radio() : null)),
+          ...ceremony(),
         ];
+        if (stageIdx <= 1) return [...head, // 장벽이 있는 대지: 장벽이 무너짐
+          { ...barrierShot(ang, S.end[3]), enter: () => { sci.hide(); W.removeBarrier(); } },
+          gearShot(ang + 0.6, S.end[4]),
+          ...(stageIdx === 0 ? [hideHolo(playerShot(S.end[5], radio()))] : collapseShots()),
+        ];
+        return [...head, hideHolo({ ...gearShot(ang + 0.6, S.end[4]), enter: () => { sci.hide(); holo.show(V(Math.sin(ang + 0.6) * CFG.world.barrierR * 0.8, 30, Math.cos(ang + 0.6) * CFG.world.barrierR * 0.8), 9, V(0, 0, 0)); } }), ...escapeShots()];
       },
       outroEnd: () => {
-        holo.hide(); sci.hide(); W.restoreTree();
+        holo.hide(); sci.hide(); W.crystalState(4); clearScene();
         const r = recoverCrystal(stageIdx, game.hard);
-        const C = BIG_CRYSTALS[stageIdx];
+        const C = BIG_CRYSTALS[Math.min(stageIdx, BIG_CRYSTALS.length - 1)];
         SFX.crystal();
         game.hud.toast(`${C.emoji} ${C.name}을(를) 되찾았다! (${r.count}/${BIG_CRYSTALS.length})`, 'gold');
         if (r.newlyUnlockedHard) setTimeout(() => game.hud.toast('⭐ 모든 크리스탈을 되찾았다! 시작 화면에서 "도전 모드"를 할 수 있어요!', 'gold'), 2600);
         showStageInfo();
+        if (stageIdx === 1) { W.revealExit(); game.collapse = true; }
+        if (stageIdx >= 2) leaveTogether(); // 용암 섬·하늘 도시·우주 요새: 탈출 장면 뒤 바로 다음 대지로
       } },
     { title: '🎉 스테이지 클리어!',
-      target: () => (stageIdx + 1 >= STAGES.length ? null : W.exitDevice ? W.exitDevice.pos : pl.pos.z < W.exitGate.z ? W.exitGate : V(0, 0, CFG.world.exitR + 40)),
+      target: () => (stageIdx + 1 >= STAGES.length ? null : W.exitDevice ? (W.exitDevice.hidden ? null : W.exitDevice.pos) : !W.exitGate ? null : pl.pos.z < W.exitGate.z ? W.exitGate : V(0, 0, CFG.world.exitR + 40)),
       text: () => stageIdx + 1 >= STAGES.length ? '다음 이야기는 아직 만드는 중이에요! 자유롭게 달려보세요'
-        : W.exitDevice?.kind === 'cannon' ? `대지 한가운데의 거대 대포 속으로! ${NAMES.stages[stageIdx + 1]}까지 슝~ 🚀`
+        : W.exitDevice?.kind === 'cannon' ? `얼음 나라가 무너진다! 렌치 박사의 거대 대포 속으로! ${NAMES.stages[stageIdx + 1]}까지 슝~ 🚀`
         : W.exitDevice?.kind === 'geyser' ? `섬 한가운데의 용암 분출구 위로! ${NAMES.stages[stageIdx + 1]}까지 솟구쳐요 🌋`
         : `북쪽 눈길을 따라 끝까지 달려가면 ${NAMES.stages[stageIdx + 1]}(으)로! ❄️`,
       done: () => false },
@@ -472,6 +524,80 @@ function boot() {
   }
   game.quests = q; game.startQuest = startQuest; game.completeQuest = completeQuest;
   // 이미 지나간 퀘스트의 결과를 맵에 반영 (불러오기·친구가 퀘스트를 깼을 때)
+  // 크리스탈 수호자 장면: 크리스탈이 빛나며 작아져 작은 보석이 되어 주인공 손에
+  function ceremony() {
+    const C = S.cer || COMMON_CER, cg = W.crystalGroup, home = tree.clone();
+    let gem = null;
+    return [
+      { ...treeShot(C[0]), enter: () => { W.crystalState(3); W.crystalState(5); SFX.crystal(); for (let i = 0; i < 3; i++) setTimeout(() => game.fx.shockwave(home.clone().add(V(0, 1, 0)), 12 + i * 6, BIG_CRYSTAL_HEX), i * 300); },
+        tick: (dt, t) => { const k = Math.max(0.12, 1 - t / 4); cg.scale.setScalar(k); cg.position.y = 2.5 + (1 - k) * 6; if (Math.random() < 0.5) game.fx.burst(home.clone().add(V(0, 6 + (1 - k) * 6, 0)), BIG_CRYSTAL_HEX, 2, 6); } },
+      { from: () => ({ pos: pl.pos.clone().add(V(7, 3, 6)), look: home.clone().lerp(pl.pos, 0.65).add(V(0, 2.4, 0)) }), dur: 5, hold: 1.2, who: `${CRY}:`, text: C[1],
+        enter: () => { cg.visible = false; pl.pos.copy(home).add(V(0, 0.4, 9)); pl.yaw = Math.PI; pl.state = 'ground'; pl.updateView(0);
+          gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({ color: BIG_CRYSTAL_HEX, toneMapped: false })); gem.position.copy(home).add(V(0, 9, 0)); scene.add(gem); },
+        tick: (dt, t) => { if (!gem) return; const to = pl.pos.clone().add(V(0, 1.6, 0)); gem.position.lerp(to, Math.min(1, dt * 1.6)); gem.rotation.y += dt * 4; if (Math.random() < 0.4) game.fx.burst(gem.position.clone(), BIG_CRYSTAL_HEX, 1, 2); } },
+      { ...playerShot(C[2], null), dur: 3.5, enter: () => { if (gem) { scene.remove(gem); gem = null; } game.fx.burst(pl.pos.clone().add(V(0, 1.4, 0)), BIG_CRYSTAL_HEX, 30, 8); game.fx.shockwave(pl.pos.clone(), 6, 0xffffff); SFX.superReady(); W.crystalState(4); } },
+    ];
+  }
+  // 얼음 나라: 크리스탈이 떠나자 무너지기 시작 → 대포로 탈출
+  function collapseShots() {
+    const X = W.exitDevice, cpos = X ? X.pos.clone() : tree.clone();
+    return [
+      { from: { pos: V(0, 140, -260), look: V(0, 0, 200) }, to: { pos: V(30, 120, -220), look: V(0, -10, 260) }, dur: 4, text: S.collapse[0],
+        enter: () => { game.hud.flash('rgba(255,255,255,0.4)'); SFX.explosion(); }, tick: () => { if (Math.random() < 0.15) game.fx.explosion(V((Math.random() - 0.5) * 600, 10, (Math.random() - 0.5) * 600 + 200), 3); } },
+      hideHolo({ from: { pos: cpos.clone().add(V(40, 22, 40)), look: cpos.clone().add(V(0, 8, 0)) }, to: { pos: cpos.clone().add(V(28, 14, 30)), look: cpos.clone().add(V(0, 8, 0)) }, dur: 4, who: radio(), text: S.collapse[1], enter: () => W.revealExit() }),
+    ];
+  }
+  // 용암 섬 / 하늘 도시 / 우주 요새를 떠나는 장면
+  const tmpProps = [];
+  function clearScene() { for (const o of tmpProps) scene.remove(o); tmpProps.length = 0; pl._cv = null; pl.view.root.visible = true; }
+  function escapeShots() {
+    const E = S.escape, up = V(0, 1, 0);
+    if (stageIdx === 2) { // 섬 폭발 → 로봇들이 하늘로 → 하나를 붙잡고 같이 날아감
+      const bots = [];
+      let grab = null;
+      return [
+        { from: { pos: V(0, 260, -520), look: V(0, 0, 0) }, to: { pos: V(60, 220, -460), look: V(0, 20, 0) }, dur: 4, text: E[0],
+          enter: () => { game.hud.flash('rgba(255,140,60,0.6)'); SFX.explosion(); },
+          tick: () => { if (Math.random() < 0.3) game.fx.explosion(V((Math.random() - 0.5) * 900, 5, (Math.random() - 0.5) * 900), 4); } },
+        { from: () => ({ pos: pl.pos.clone().add(V(30, 8, 30)), look: pl.pos.clone().add(V(0, 20, 0)) }), dur: 4, text: E[1],
+          enter: () => { for (let i = 0; i < 14; i++) { const b = new THREE.Group(), r = robotMesh(i % 3 ? 'wasp' : 'brute'); r.scale.setScalar(i % 3 ? 1.6 : 1.8); b.add(r); b.position.copy(pl.pos).add(V((Math.random() - 0.5) * 60, Math.random() * 10, (Math.random() - 0.5) * 60)); b.userData.v = 10 + Math.random() * 14; scene.add(b); tmpProps.push(b); bots.push(b); } },
+          tick: (dt) => { for (const b of bots) { b.position.y += b.userData.v * dt; b.rotation.y += dt; if (Math.random() < 0.2) game.fx.burst(b.position.clone(), 0xff8a30, 1, 3); } } },
+        { from: () => ({ pos: pl.pos.clone().add(V(10, -4, 12)), look: pl.pos.clone().add(V(0, 2, 0)) }), dur: 4, hold: 0.8, text: E[2].replace('${ME}', nm(pl.kind)),
+          enter: () => { grab = new THREE.Group(); const r = robotMesh('brute'); r.scale.setScalar(1.8); grab.add(r); const f = new THREE.Mesh(new THREE.ConeGeometry(0.8, 3, 8), new THREE.MeshBasicMaterial({ color: 0x66ccff, toneMapped: false })); f.rotation.x = Math.PI; f.position.y = -0.5; grab.add(f); grab.position.copy(pl.pos).add(V(0, 3.2, 0)); scene.add(grab); tmpProps.push(grab); pl._cv = V(0, 14, 0); },
+          tick: (dt) => { if (!pl._cv) return; pl.pos.addScaledVector(pl._cv, dt); grab.position.copy(pl.pos).add(V(0, 3.2, 0)); pl.updateView(dt); for (const b of bots) b.position.y += b.userData.v * dt; } },
+        { ...playerShot(E[3], radio()), from: () => ({ pos: pl.pos.clone().add(V(14, -10, 14)), look: pl.pos.clone() }), dur: 3.5,
+          tick: (dt) => { if (!pl._cv) return; pl._cv.y = Math.min(60, pl._cv.y + 30 * dt); pl.pos.addScaledVector(pl._cv, dt); grab.position.copy(pl.pos).add(V(0, 3.2, 0)); pl.updateView(dt); game.fx.burst(grab.position.clone(), 0x66ccff, 1, 3); } },
+      ];
+    }
+    if (stageIdx === 3) { // 기어는 비행접시로 도망 → 주인공은 작은 우주선을 타고 쫓아감
+      const pod = makeGearPod(), ship = makeShuttle();
+      const pad = W.labPad.clone();
+      return [
+        { from: { pos: pad.clone().add(V(40, 12, 40)), look: pad.clone().add(V(0, 20, 0)) }, dur: 4, text: E[0],
+          enter: () => { holo.hide(); pod.position.copy(pad).add(V(0, 10, 0)); scene.add(pod); tmpProps.push(pod); SFX.boost(); },
+          tick: (dt, t) => { pod.position.y += (8 + t * 30) * dt; pod.rotation.y += dt * 3; } },
+        { from: () => ({ pos: pl.pos.clone().add(V(14, 6, 14)), look: ship.position.clone() }), dur: 3.5, text: E[1].replace('${ME}', nm(pl.kind)),
+          enter: () => { ship.position.copy(pl.pos).add(V(0, 1.6, 6)); scene.add(ship); tmpProps.push(ship); } },
+        { from: () => ({ pos: ship.position.clone().add(V(16, -6, -16)), look: ship.position.clone() }), dur: 3.5, who: me(), text: E[2],
+          enter: () => { pl.view.root.visible = false; SFX.boost(); }, tick: (dt, t) => { ship.position.y += (6 + t * 40) * dt; ship.rotation.x = -0.9; ship.userData.flame.scale.y = 1.5 + Math.random(); game.fx.burst(ship.position.clone().add(V(0, -3, 0)), 0x66ccff, 2, 4); } },
+      ];
+    }
+    // 우주 요새: 최종 전함으로 도망 → 슈퍼 변신으로 쫓아감
+    const bs = makeBattleship();
+    return [
+      { from: { pos: V(0, 120, -300), look: V(0, 60, 0) }, dur: 4.5, text: E[0],
+        enter: () => { holo.hide(); bs.position.set(0, 40, 0); scene.add(bs); tmpProps.push(bs); SFX.bossRoar(); },
+        tick: (dt, t) => { bs.position.y += (10 + t * 25) * dt; bs.position.z += t * 20 * dt; } },
+      { ...playerShot(E[1], null), dur: 4, enter: () => { SFX.superReady(); game.fx.burst(pl.pos.clone().add(V(0, 1, 0)), 0xffe14d, 40, 10); for (let i = 0; i < 3; i++) setTimeout(() => game.fx.shockwave(pl.pos.clone(), 6 + i * 5, 0xffe14d), i * 250); pl.superOn = true; } },
+      { from: () => ({ pos: pl.pos.clone().add(V(12, -8, 12)), look: pl.pos.clone() }), dur: 3.5, who: me(), text: E[2],
+        enter: () => { pl._cv = V(0, 30, 0); }, tick: (dt) => { if (!pl._cv) return; pl._cv.y += 40 * dt; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); game.fx.burst(pl.pos.clone(), 0xffe14d, 2, 4); } },
+    ];
+  }
+  // 다 같이 다음 대지로 (같이 하기 중이면 방장이 모두를 이동)
+  function leaveTogether() {
+    if (net.shared) { if (net.host) net.startAll(stageIdx + 1); }
+    else goNextStage();
+  }
   function applyQuestEffects(n) {
     const dead = (tag) => { const c = core(tag); if (c) { c.alive = false; if (c.mesh) c.mesh.visible = false; c.shielded = false; } };
     if (n >= 1) dead('base');
@@ -528,9 +654,31 @@ function boot() {
       hideHolo(flyShot(I[4], me(), V(0, 120, 90), V(0, -6, -14), 30, V(6, 3, 12), 3)),
       { ...playerShot(I[5], radio()), dur: 3.5 },
     ];
+    if (stageIdx === 4) { // 5. 거대 우주선에 도킹
+      const sh = makeShuttle(), R = CFG.world.barrierR;
+      return [
+        { from: { pos: V(0, 900, -R - 1400), look: V(0, 0, 0) }, to: { pos: V(0, 600, -R - 900), look: V(0, 0, 0) }, dur: 5, text: I[0],
+          enter: () => { pl.view.root.visible = false; sh.position.set(0, 200, -R - 700); sh.scale.setScalar(4); scene.add(sh); tmpProps.push(sh); },
+          tick: (dt) => { sh.position.lerp(V(0, 30, -R - 20), Math.min(1, dt * 0.6)); sh.lookAt(0, 30, 0); } },
+        { from: { pos: V(60, 60, -R - 120), look: V(0, 25, -R) }, dur: 4.5, text: I[1],
+          enter: () => { SFX.store(); }, tick: (dt) => { sh.position.lerp(V(0, 25, -R + 30), Math.min(1, dt * 1.2)); sh.userData.flame.scale.y = 0.5 + Math.random() * 0.5; } },
+        { ...crystalOut(I[2]), enter: () => { clearScene(); W.crystalState(2); SFX.crystal(); } },
+        gearShot(0.4, I[3]),
+        hideHolo(playerShot(I[4], me())),
+        { ...playerShot(I[5], radio()), dur: 3.5 },
+      ];
+    }
+    if (stageIdx === 5) return [ // 6. 최후의 결전
+      flyShot(I[0], null, V(0, 0, -60), V(0, 0, 40), 0, V(10, 4, -16), 4.5),
+      { from: { pos: V(0, 30, 120), look: V(0, 0, 300) }, dur: 4, who: `${VIL}:`, text: I[1], enter: () => { const b = makeBattleship(); b.position.set(0, 0, 420); b.rotation.y = Math.PI; scene.add(b); tmpProps.push(b); } },
+      { ...playerShot(I[2], radio()), dur: 4 },
+    ];
     const H = SKY_HOLES[0] || { x: 300, z: 300, r: 20 }, hp = V(H.x, 0, H.z), E = CFG.sky.edge;
-    return [ // 4. 구름을 뚫고 솟아올라 하늘 도시에 도착
-      flyShot(I[0], null, V(0, -70, 60), V(0, 75, -4), 30, V(14, -4, 18), 4.5),
+    let bot = null;
+    return [ // 4. 도망치는 로봇에 매달려 구름을 뚫고 하늘 기지에 도착
+      { ...flyShot(I[0], null, V(0, -70, 60), V(0, 75, -4), 30, V(14, -4, 18), 4.5),
+        enter: () => { pl.pos.set(0, -70, 60); pl._cv = V(0, 75, -4); pl.view.root.visible = true; bot = new THREE.Group(); const r = robotMesh('brute'); r.scale.setScalar(1.8); bot.add(r); scene.add(bot); tmpProps.push(bot); },
+        tick: (dt) => { if (!pl._cv) return; pl._cv.y -= 30 * dt; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); bot.position.copy(pl.pos).add(V(0, 3.2, 0)); game.fx.burst(bot.position.clone(), 0x66ccff, 1, 3); } },
       { from: { pos: hp.clone().add(V(H.r + 14, 30, 10)), look: hp.clone().add(V(0, -40, 0)) }, to: { pos: hp.clone().add(V(H.r + 6, 18, 4)), look: hp.clone().add(V(0, -40, 0)) }, dur: 5, text: I[1], enter: () => { pl.view.root.visible = false; } },
       { from: { pos: V(30, 40, E - 160), look: V(0, -30, E + 300) }, to: { pos: V(-30, 26, E - 90), look: V(0, -45, E + 300) }, dur: 5, text: I[2] },
       digShot(I[3]), crystalOut(''),
@@ -541,7 +689,8 @@ function boot() {
   };
   // 이야기가 끝난 뒤 시작 자세: 대포로 날아온 3스테이지는 하늘에서 떨어지고, 4스테이지는 구름 아래에서 솟구쳐 착지
   function afterIntro() {
-    pl._cv = null; pl.view.root.visible = true;
+    clearScene();
+    if (stageIdx === 5) { pl.view.root.visible = true; game.shmup.pl = pl; game.shmup.start(); return; }
     W.crystalState(2);
     if (stageIdx === 2) { pl.pos.set(0, 70, 40); pl.state = 'air'; pl.vel.set(0, -8, -8); }
     else if (stageIdx === 3) { pl.pos.set(0, 26, 28); pl.state = 'air'; pl.vel.set(0, 16, -4); }
@@ -591,9 +740,18 @@ function boot() {
   // 얼음 나라: 슈퍼 공격으로 녹인 눈 (같이 하기 중이면 친구 화면에서도 녹음)
   game.melt = (p, r) => { if (W.meltSnow(p, r) && net.shared) net.sendGame({ t: 'sn', x: +p.x.toFixed(1), z: +p.z.toFixed(1), r: +r.toFixed(1) }); };
   // 하늘 도시 끝 너머로 떨어짐: "아아악!!!" 장면 뒤 체크포인트에서 다시 시작 (링 30% 잃음)
+  game.breakHull = (a, y) => {
+    const h = W.breakHull(a, y); if (!h) return;
+    addHullHole(h);
+    const at = V(Math.cos(h.a) * CFG.world.barrierR, h.y + 1.5, Math.sin(h.a) * CFG.world.barrierR);
+    game.fx.explosion(at, 1.8); game.fx.burst(at, 0xff8a30, 24, 10); SFX.explosion(); pl.shake = 0.5;
+    game.hud.toast('💥 우주선 외벽에 구멍이 뚫렸다! 밖은... 우주!', 'gold');
+    if (net.shared) net.sendGame({ t: 'hh', a: h.a, y: h.y });
+  };
   game.onVoidFall = (keep, lost) => {
+    const space = W.mode === 'ship';
     pl._cv = pl.vel.clone(); pl._cv.y = Math.min(pl._cv.y, -10); pl._cv.x *= 0.4; pl._cv.z *= 0.4;
-    playCine([{ from: () => ({ pos: pl.pos.clone().add(V(4, 16, 4)), look: pl.pos.clone() }), dur: 2.4, hold: 0.3, who: me(), text: '아아아아악!!!!',
+    playCine([{ from: () => ({ pos: pl.pos.clone().add(space ? V(6, 22, 6) : V(4, 16, 4)), look: pl.pos.clone().add(space ? V(0, -40, 0) : V(0, 0, 0)) }), dur: 2.6, hold: 0.3, who: me(), text: space ? '으아아아악~~! 지구로 떨어진다~~!' : '아아아아악!!!!',
       enter: () => SFX.hurt(),
       tick: (dt) => { pl._cv.y = Math.max(-45, pl._cv.y - 40 * dt); pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); if (Math.random() < 0.4) game.fx.burst(pl.pos.clone().add(V(0, 2, 0)), 0xffffff, 2, 2); } }],
     () => { pl._cv = null; pl.die(keep); if (lost) game.hud.toast(`☁️ 구름 아래로 떨어졌어요... (링 -${lost})`); });
@@ -616,7 +774,7 @@ function boot() {
   scene.add(arrow);
 
   // ---- 시련을 해내면 크리스탈이 씨앗을 보내줌 ----
-  const CRY_NAME = BIG_CRYSTALS[stageIdx].name;
+  const CRY_NAME = BIG_CRYSTALS[Math.min(stageIdx, BIG_CRYSTALS.length - 1)].name;
   function giveSeed(m) {
     const n = game.missions.crystals;
     SFX.superReady();
@@ -634,7 +792,7 @@ function boot() {
   // 되찾은 대지의 크리스탈 표시
   const prog0 = loadProgress();
   game.allClear = prog0.crystals.every(Boolean); // 모든 대지를 되찾으면 링 없이 슈퍼 변신 (5분, 쿨타임 1분)
-  const showStageInfo = () => { const pr = loadProgress(); game.hud.setStageInfo(STAGE.place, game.hard ? pr.hardCrystals : pr.crystals, BIG_CRYSTALS.map((c) => c.color), game.hard); };
+  const showStageInfo = () => { const pr = loadProgress(); game.hud.setStageInfo(STAGE.place, game.hard && !game.ngplus ? pr.hardCrystals : pr.crystals, BIG_CRYSTALS.map((c) => c.color), game.hard); };
   showStageInfo();
 
   // ---- 아이템 버튼 ----
@@ -650,7 +808,7 @@ function boot() {
   function goNextStage() {
     if (leaving) return;
     leaving = true;
-    try { sessionStorage.setItem('sf-carry', JSON.stringify({ char: pl.kind, hearts: pl.storedHearts, hard: game.hard })); } catch (e) {}
+    try { sessionStorage.setItem('sf-carry', JSON.stringify({ char: pl.kind, hearts: pl.storedHearts, hard: game.hard, ngplus: game.ngplus })); } catch (e) {}
     const L = document.getElementById('loading');
     document.getElementById('loading-stage').textContent = `STAGE ${stageIdx + 2}`;
     document.getElementById('loading-title').textContent = NAMES.stages[stageIdx + 1];
@@ -664,6 +822,17 @@ function boot() {
   const STEP = 1 / 60;
   function tick(dt) {
     const input = game.input;
+    if (game.shmup?.active && !cine.active) { // 6스테이지: 비행 슈팅
+      input.update(dt);
+      game.time += dt;
+      game.shmup.update(Math.min(dt, 1 / 20), input);
+      for (const b of Object.values(input.buttons)) { b.pressed = false; b.released = false; }
+      game.fx.update(dt); net.update(dt);
+      game.gfx.update(dt, game.time, pl.pos);
+      game.hud.update(pl, game.missions, null, pl.stats);
+      playMusic(game.shmup.boss ? 'boss' : 'super');
+      return;
+    }
     game.musicHold = Math.max(0, (game.musicHold || 0) - dt);
     playMusic(game.musicHold > 0 ? 'clear' : cine.active ? 'story' : (game.boss && game.boss.alive && game.boss.spawned) ? 'boss' : pl.superOn ? 'super' : `stage${stageIdx + 1}`);
     if (cine.active) { // 이야기 장면 중에는 플레이어·몬스터 정지
@@ -720,6 +889,10 @@ function boot() {
     }
     if (game.boss && game.boss.alive && game.boss.state !== 'enter') game.hud.setBoss(`🤖 ${game.boss.name}`, game.boss.hp / game.boss.maxHp);
     exitTick(dt);
+    if (game.collapse && !cine.active) { // 얼음 나라 붕괴: 땅이 흔들리고 얼음 덩어리가 떨어짐
+      if (Math.random() < dt * 1.2) { const p = pl.pos.clone().add(V((Math.random() - 0.5) * 80, 0, (Math.random() - 0.5) * 80)); p.y = W.groundAt(p.x, p.z) + 1; game.fx.explosion(p, 1.2); game.fx.burst(p, 0xdff4ff, 14, 10); SFX.explosion(); }
+      pl.shake = Math.max(pl.shake, 0.08 + Math.random() * 0.06);
+    }
     if (pl.alive && stageIdx === 0 && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) {
       if (W.barrierUp && !leaving && !game.wentNext) game.hud.toast('🏃 기어 군단을 따돌렸다! 다음 대지로!', 'gold');
       if (net.shared) { // 같이 하기: 한 명이 도착하면 모두 함께 다음 대지로
@@ -828,7 +1001,7 @@ function boot() {
     const cps = W.checkpoints.map((c, i) => (c.active ? i : -1)).filter((i) => i >= 0);
     const near = W.nearestCheckpoint(pl.pos);
     return {
-      v: 1, stage: stageIdx, hard: game.hard, char: pl.kind, quest: q.i >= 0 ? q.i : (q.pending ?? 0),
+      v: 1, stage: stageIdx, hard: game.hard, ngplus: game.ngplus, char: pl.kind, quest: q.i >= 0 ? q.i : (q.pending ?? 0),
       rings: pl.rings, health: Math.max(1, Math.round(pl.health)), hearts: pl.storedHearts,
       seed: missionSeed, missionsDone: game.missions.list.map((m) => m.done), stats: pl.stats, kills,
       checkpoints: cps, cp: W.checkpoints.indexOf(near), secret: pl.secretFound,
@@ -880,7 +1053,7 @@ function boot() {
     showStageInfo();
     started = true;
     clock.getDelta();
-    playCine(buildIntro(), () => { afterIntro(); startQuest(0); game.hud.toast(`${NAMES.characters[pl.kind]}(으)로 ${NAMES.stages[stageIdx]} 스테이지 시작!`); });
+    playCine(buildIntro(), () => { afterIntro(); if (stageIdx < 5) startQuest(0); game.hud.toast(`${NAMES.characters[pl.kind]}(으)로 ${NAMES.stages[stageIdx]} 스테이지 시작!`); });
   }
   document.getElementById('start-btn').addEventListener('click', () => {
     if (net.code && net.host) { net.startAll(stageSel); return; }       // 방장: 다 같이 시작
@@ -909,6 +1082,45 @@ function boot() {
     });
   }
 
+  // ---- 엔딩: 지구로 돌아와 하늘에서 떨어지는 기어의 우주선을 바라봄 → 새게임+ 칸 ----
+  function playEnding() {
+    const E = S.ending, gfx = game.gfx;
+    const G = new THREE.Group(), base = V(0, 0, 60000); G.position.copy(base); scene.add(G);
+    const ground = new THREE.Mesh(new THREE.CircleGeometry(900, 48), new THREE.MeshLambertMaterial({ color: 0x5fbf4a })); ground.rotation.x = -Math.PI / 2; G.add(ground);
+    for (let i = 0; i < 80; i++) { const a = Math.random() * 6.28, r = 20 + Math.random() * 300, t = new THREE.Group(); t.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+      const tr = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 3, 6), new THREE.MeshLambertMaterial({ color: 0x8b5a2b })); tr.position.y = 1.5; t.add(tr);
+      const lf = new THREE.Mesh(new THREE.IcosahedronGeometry(2.4, 1), new THREE.MeshLambertMaterial({ color: [0x3fae3a, 0x5cc444, 0x2f9e44][i % 3], flatShading: true })); lf.position.y = 4.4; t.add(lf); G.add(t); }
+    const fallShip = makeBattleship(); fallShip.scale.setScalar(1.4); G.add(fallShip);
+    const day = () => { const U = gfx.skyMat.uniforms; U.top.value.set(0x2a74ee); U.horizon.value.set(0xc4e6ff); U.bottom.value.set(0xa7c9e4); U.cloudAmt.value = 1; scene.fog.color.set(0xcbe6ff); scene.fog.density = 0.0012; if (gfx.stars) gfx.stars.visible = false; if (gfx.earth) gfx.earth.visible = false; };
+    const spot = base.clone().add(V(0, 0, 0));
+    const shots = [
+      { from: { pos: V(0, 60, pl.pos.z - 60), look: V(0, 0, pl.pos.z + 60) }, dur: 4, text: E[0] },
+      { from: () => ({ pos: pl.pos.clone().add(V(8, 10, -14)), look: pl.pos.clone().add(V(0, -20, 0)) }), dur: 4, text: E[1],
+        enter: () => { game.shmup.stop(); pl._cv = V(0, -40, 0); pl.superOn = true; pl.view.root.visible = true; gfx.earthOffset.y = -1800; },
+        tick: (dt) => { pl._cv.y -= 30 * dt; pl.pos.addScaledVector(pl._cv, dt); pl.view.root.position.copy(pl.pos); game.fx.burst(pl.pos.clone(), 0xffe14d, 2, 4); } },
+      { from: () => ({ pos: spot.clone().add(V(6, 2.2, 8)), look: spot.clone().add(V(0, 1.4, 0)) }), dur: 4, text: E[2],
+        enter: () => { day(); pl._cv = null; pl.superOn = false; pl.pos.copy(spot); pl.state = 'ground'; pl.yaw = Math.PI; pl.view.root.scale.setScalar(1); pl.updateView(0.1); pl.view.root.visible = true; } },
+      { from: { pos: spot.clone().add(V(-4, 1.0, -6)), look: spot.clone().add(V(30, 110, 300)) }, dur: 6, hold: 1, text: E[3],
+        enter: () => { fallShip.position.set(-60, 230, 380); }, tick: (dt) => { fallShip.position.add(V(18 * dt, -28 * dt, 0)); fallShip.rotation.z += dt * 0.3; game.fx.burst(base.clone().add(fallShip.position), 0x555555, 2, 4); } },
+      { from: { pos: spot.clone().add(V(-4, 1.0, -6)), look: spot.clone().add(V(60, 70, 300)) }, dur: 4, who: `${VIL}:`, text: E[4], tick: (dt) => { fallShip.position.add(V(18 * dt, -28 * dt, 0)); fallShip.rotation.z += dt * 0.3; game.fx.burst(base.clone().add(fallShip.position), 0x555555, 2, 4); } },
+      { ...playerShot(LINES[pl.kind].win, me()), from: () => ({ pos: spot.clone().add(V(0, 1.8, 5)), look: spot.clone().add(V(0, 1.4, 0)) }), dur: 3.5 },
+      { from: { pos: spot.clone().add(V(30, 40, 60)), look: spot.clone() }, to: { pos: spot.clone().add(V(80, 120, 160)), look: spot.clone() }, dur: 6, hold: 1.5, text: E[5] },
+    ];
+    playCine(shots, () => {
+      markFinalClear();
+      const slot = makeNewGamePlusSlot(pl.kind);
+      const el = document.getElementById('ending');
+      el.innerHTML = `<h1>🎉 스피드 프렌즈 — 엔딩!</h1>
+        <p>다섯 크리스탈의 수호자 <b>${nm(pl.kind)}</b>와 친구들 덕분에 세상에 평화가 돌아왔어요!</p>
+        <p>💾 <b>${slot}번 칸에 '새게임+'</b>가 만들어졌어요.<br>크리스탈을 모두 가진 채 1스테이지부터 다시, 훨씬 어렵게!</p>
+        <p style="opacity:.8">만든 사람: 아빠와 아들 · 함께 해 줘서 고마워요!</p>
+        <button id="ending-ok">처음 화면으로</button>`;
+      el.classList.add('on');
+      document.getElementById('ending-ok').onclick = () => { net.leave(); location.href = location.pathname; };
+      playMusic('clear');
+    });
+  }
+  if (stageIdx === 5) game.shmup = new Shmup(game, { net, pl, onToast: (t) => game.hud.toast(t, 'gold'), onWin: () => playEnding() });
   game.startGame = startGame;
   game.setCharacter = setCharacter;
   document.getElementById('loading').classList.add('hidden');
@@ -918,7 +1130,10 @@ function boot() {
     contBtn.style.display = '';
     contBtn.addEventListener('click', () => { loadList.style.display = loadList.style.display === 'none' ? '' : 'none'; showLoadList(loadList, (slot) => { const d = readSave(slot); location.href = `?stage=${d.stage}&load=${slot}`; }); });
   }
-  if (LOAD) { // 저장한 곳에서 이어하기
+  if (LOAD?.ngFresh) { // 새게임+ 처음 시작: 1스테이지 이야기부터 (크리스탈은 모두 가진 채, 어렵게)
+    document.getElementById('start').classList.add('hidden');
+    startGame().then(() => game.hud.toast('⭐ 새게임+! 크리스탈을 모두 가진 채, 훨씬 어려운 모험이 시작돼요!', 'gold'));
+  } else if (LOAD) { // 저장한 곳에서 이어하기
     initAudio();
     document.body.classList.add('playing');
     document.getElementById('start').classList.add('hidden');

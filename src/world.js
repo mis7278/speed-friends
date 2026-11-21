@@ -76,6 +76,23 @@ export const THEMES = {
     waterDeep: 0xffffff, waterShallow: 0xffffff, swampWater: 0xffffff, frozen: false, grass: false, snowyTrees: false, skyLand: true,
     villainMetal: 0x50565f,
   },
+  ship: { // 5스테이지: 맵 전체가 닥터 기어의 거대 우주선 (진짜 본거지). 끝은 우주선 외벽, 밖은 우주
+    grassA: 0x5d6572, grassB: 0x4a515c, grassDry: 0x6a7280, dirt: 0x3a4048, road: 0x8a94a3, roadLine: 0xff4fd8,
+    rock: 0x4a515c, cliffA: 0x6a4a9a, cliffB: 0x8a6ac8, metal: 0x3a4048, metalLine: 0x23272e, rust: 0x5a3a7a,
+    swampA: 0x2a3a5a, swampB: 0x2a5a7a, sand: 0x6a7480, underwater: 0x4fd8ff, snow: 0x9aa6b4, mountain: 0x3a4048,
+    leaf: [0xff4fd8, 0xd040ff, 0x9a5aff, 0xff7ae0], pine: [0x3a4048, 0x4a515c], caps: [0xff4fd8, 0x4fd8ff, 0xffd23a],
+    skyTop: 0x01020a, skyHorizon: 0x0a1028, skyBottom: 0x000000, sun: 0xeef2ff, fog: 0x0a1028, fogDensity: 0.00035,
+    hemiSky: 0xc8d0ff, hemiGround: 0x3a3050, sunInt: 2.1, hemiInt: 1.15,
+    waterDeep: 0x000000, waterShallow: 0x000000, swampWater: 0x000000, frozen: false, grass: false, snowyTrees: false, shipLand: true, space: true,
+    villainMetal: 0x3a3f4a,
+  },
+  space: { // 6스테이지: 우주 (아래에 지구) — 슈퍼 상태로 날며 싸우는 비행 슈팅
+    grassA: 0, grassB: 0, grassDry: 0, dirt: 0, road: 0, roadLine: 0, rock: 0, cliffA: 0, cliffB: 0, metal: 0x3a4048, metalLine: 0, rust: 0,
+    swampA: 0, swampB: 0, sand: 0, underwater: 0, snow: 0, mountain: 0, leaf: [0x888888], pine: [0x888888], caps: [0x888888],
+    skyTop: 0x000005, skyHorizon: 0x050a20, skyBottom: 0x000000, sun: 0xffffff, fog: 0x000000, fogDensity: 0.00001,
+    hemiSky: 0xdde6ff, hemiGround: 0x30406a, sunInt: 2.4, hemiInt: 1.2,
+    waterDeep: 0, waterShallow: 0, swampWater: 0, frozen: false, grass: false, snowyTrees: false, space: true, villainMetal: 0x3a3f4a,
+  },
 };
 // 지금 스테이지의 땅 종류 (World가 만들어질 때 정해짐): forest / ice / lava / sky
 export const MODE = { name: 'forest' };
@@ -213,6 +230,7 @@ export function terrainHeight(x, z) {
     h = mix(h, Math.min(h, hp), 1 - smooth(P.r * 1.2, R, d));
   }
   const md = MODE.name;
+  if (md === 'space') return -600;
   if (md === 'ice') { // 거대한 얼음산 (꼭대기는 평평한 출발 지점)
     const P = ICE_PEAK, d = Math.hypot(x - P.x, z - P.z);
     if (d < P.r) h += P.h * Math.pow(1 - smooth(P.top, P.r, d), 1.25) * (0.94 + 0.06 * vnoise(x * 0.03, z * 0.03));
@@ -241,6 +259,10 @@ export function terrainHeight(x, z) {
     return h;
   }
   if (md === 'sky') { if (ds > skyEdgeR(x, z)) h = CFG.sky.cloudY; return h; } // 땅 끝 너머: 구름 바다 (밟을 수 없음)
+  if (md === 'ship') { // 우주선 갑판: 높낮이를 낮추고 물 없음, 외벽 너머는 우주
+    if (ds > CFG.world.barrierR + 3) return -600;
+    return Math.max(0.5, 3 + (h - 3) * 0.4);
+  }
   // 맵 바깥: 가파른 산맥 (북쪽 출구 길만 뚫려 있음)
   if (ds > 1700) {
     const ex = exitMask(x, z);
@@ -562,8 +584,9 @@ export class World {
     this.houses = []; this.fadeBoxes = []; this.indoors = []; this.discoveries = []; this.chests = []; this.waterfalls = []; this.beacons = [];
     this.barrierUp = true; this.barrierSink = 0;
     this.occ = new Set();
-    this.rand = mulberry32({ forest: 1234, ice: 777, lava: 555, sky: 999 }[themeName] || 777);
+    this.rand = mulberry32({ forest: 1234, ice: 777, lava: 555, sky: 999, ship: 4321 }[themeName] || 777);
     this.meltPatches = [];
+    this.hullHoles = (quality.hullHoles || []).map((h) => ({ a: +h.a || 0, y: +h.y || 0 }));
     this.batch = new Batch();       // 작은 소품: 가까울 때만 만들어짐
     this.bigBatch = new Batch(400); // 큰 건물·랜드마크: 멀리서도 보임
     this.lm = false;                // true인 동안 put()은 랜드마크로
@@ -571,7 +594,7 @@ export class World {
     this.streamT = 0; this.lastRebuild = new THREE.Vector2(1e9, 1e9);
     this.matLit = new THREE.MeshLambertMaterial({ vertexColors: true });
     this.matGlow = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
-    this._build();
+    if (themeName === 'space') this._buildSpace(); else this._build();
   }
 
   // ---------- 지면 ----------
@@ -599,6 +622,8 @@ export class World {
   groundAt(x, z, y = Infinity, stepUp = 0.9, deep = false) {
     let h = terrainHeight(x, z), surface = 'terrain';
     if (this.mode === 'lava') { if (h < CFG.lava.level) { h = CFG.lava.level - 0.3; surface = 'lava'; } }
+    else if (this.mode === 'space') { h = 0; surface = 'space'; }
+    else if (this.mode === 'ship' && h < -100) { h = -1e4; surface = 'void'; }
     else if (this.mode === 'sky') { if (h < -20) { if (Math.hypot(x, z) < skyEdgeR(x, z)) { h = CFG.sky.cloudY; surface = 'cloud'; } else { h = -1e4; surface = 'void'; } } }
     else if (this.T.frozen) { if (h < 0) { h = 0; surface = 'ice'; } }
     else if (h < CFG.water.swimDepth) { if (!deep) h = CFG.water.swimDepth; surface = 'water'; }
@@ -643,6 +668,7 @@ export class World {
   }
   // 화면에 그려진 땅(격자 메시)이 실제 높이보다 얼마나 위에 있는지 + 경사 → 캐릭터가 땅에 묻혀 보이지 않게 그만큼 올려 그림
   visualLift(x, z) {
+    if (this.mode === 'space') return 0;
     const st = this.terrain.lods[0].step;
     const x0 = Math.floor(x / st) * st, z0 = Math.floor(z / st) * st, fx = (x - x0) / st, fz = (z - z0) / st;
     const h00 = terrainHeight(x0, z0), h10 = terrainHeight(x0 + st, z0), h01 = terrainHeight(x0, z0 + st), h11 = terrainHeight(x0 + st, z0 + st);
@@ -690,7 +716,7 @@ export class World {
     }
     return false;
   }
-  isWater(x, z) { return !this.T.frozen && !this.T.lava && !this.T.skyLand && terrainHeight(x, z) < 0; }
+  isWater(x, z) { return !this.T.frozen && !this.T.lava && !this.T.skyLand && !this.T.space && terrainHeight(x, z) < 0; }
   lavaAt(x, z) { return this.mode === 'lava' && terrainHeight(x, z) < CFG.lava.level; }
 
   collide(pos, radius, height, vel, oldY = pos.y) {
@@ -739,6 +765,24 @@ export class World {
     }
     // 바깥 경계: 장벽 (장벽보다 높이 날아서 넘어가면 통과 → 기어 군단이 막음), 장벽이 없으면 맵 끝
     const r = Math.hypot(pos.x, pos.z);
+    this.hullHitA = null;
+    if (this.mode === 'ship') {
+      const Rb = CFG.world.barrierR;
+      if (r > Rb - 3 && r < Rb + 3) {
+        const a = Math.atan2(pos.z, pos.x), hole = this.hullHoles.some((h) => Math.abs(Math.atan2(Math.sin(a - h.a), Math.cos(a - h.a))) * Rb < 1.25 && pos.y < h.y + 2.4 && pos.y > h.y - 1);
+        if (!hole && r < Rb + 1.5) {
+          const lim2 = Rb - 3, nx = pos.x / r, nz = pos.z / r;
+          pos.x = nx * lim2; pos.z = nz * lim2;
+          const vn = vel.x * nx + vel.z * nz; if (vn > 0) { vel.x -= vn * nx; vel.z -= vn * nz; }
+          this.hullHitA = a; hit = true;
+        } else if (hole) { // 구멍 옆면에 부딪힘 (가운데로)
+          const h = this.hullHoles.find((q) => Math.abs(Math.atan2(Math.sin(a - q.a), Math.cos(a - q.a))) * Rb < 1.25);
+          const ta = h.a, d = Math.atan2(Math.sin(a - ta), Math.cos(a - ta)) * Rb;
+          if (Math.abs(d) > 0.6) { const na = ta + Math.sign(d) * 0.6 / Rb; pos.x = Math.cos(na) * r; pos.z = Math.sin(na) * r; }
+        }
+      }
+      return hit;
+    }
     let lim = this.barrierUp ? CFG.world.barrierR - 3 : CFG.world.terrainHalf - 150;
     // 장벽보다 높이 있거나, 이미 장벽 바깥에 있으면 막지 않음 (바깥에서 안으로 돌아오는 건 가능)
     if (this.barrierUp && r > lim - 2 && (pos.y > this.barrierTop(pos.x, pos.z) || r > CFG.world.barrierR + 1)) lim = CFG.world.terrainHalf - 150;
@@ -818,7 +862,7 @@ export class World {
     this._smallFactory();
     this._lab();
     if (walled) this._ponds();
-    this._villages();
+    if (md !== 'lava' && md !== 'ship') this._villages(); // 용암 섬·우주선에는 사람이 살던 흔적이 없음
     this._discoveries();
     this._landmarks();
     this._mainRoad();
@@ -830,9 +874,9 @@ export class World {
     this._zoneLake();
     this._breakableWalls();
     if (walled) { this._barrier(); this._outside(); }
-    else { // 벽 없는 대지: 용암 바다 / 하늘 끝
+    else { // 벽 없는 대지: 용암 바다 / 하늘 끝 / 우주선 외벽
       this.barrierGroup = new THREE.Group(); this.root.add(this.barrierGroup); this.barrierUp = false;
-      if (md === 'lava') this._lavaSea(); else this._skyEdge();
+      if (md === 'lava') this._lavaSea(); else if (md === 'sky') this._skyEdge(); else this._hull();
     }
     this._fieldFill();
     if (md === 'sky') this._holeRims();
@@ -971,7 +1015,7 @@ export class World {
       ], 4000, SR, { shadow: false }),
     };
     if (this.mode === 'lava') Object.assign(this.trees, this._lavaSets(set, lam, NR, SR));
-    if (this.mode === 'sky') Object.assign(this.trees, this._skySets(set, lam, NR, SR));
+    if (this.mode === 'sky' || this.mode === 'ship') Object.assign(this.trees, this._skySets(set, lam, NR, SR));
     this.treeSets = Object.values(this.trees);
     this.treeTypes = ['round', 'pine', 'birch', 'poplar', 'cherry', 'palm', 'mush', 'metal'];
   }
@@ -1122,6 +1166,7 @@ export class World {
   }
   // 플레이어 주변 다시 그리기 (나무·소품·지형)
   stream(focus, dt, force = false) {
+    if (this.mode === 'space') return;
     SWAY.player.value.copy(focus);
     FAR.center.value.set(focus.x, focus.z); FAR.nearR.value = this.trees.round.nearR;
     this.terrain.update(focus.x, focus.z, this.q.mobile ? 5 : 7, force);
@@ -1336,7 +1381,9 @@ export class World {
   }
 
   // ---------- 소품 ----------
+  get noLife() { return this.mode === 'lava' || this.mode === 'ship'; }
   fence(x1, z1, x2, z2, color = 0xa8743f) {
+    if (this.noLife) return;
     const len = Math.hypot(x2 - x1, z2 - z1), n = Math.max(1, Math.round(len / 3));
     const yaw = Math.atan2(x2 - x1, z2 - z1);
     for (let i = 0; i <= n; i++) {
@@ -1349,6 +1396,7 @@ export class World {
     }
   }
   signpost(x, z, yaw, color = 0xffffff, board = 0x3c7bd8) {
+    if (this.noLife) return;
     const y = terrainHeight(x, z);
     this.put(BASE.cyl6, 0x8a8f99, x, y + 1.4, z, 0.14, 2.8, 0.14);
     this.putRel(BASE.box, board, x, z, y, yaw, 0, 2.5, 0, 1.8, 0.8, 0.08);
@@ -1378,6 +1426,7 @@ export class World {
     this._solid(x, y + s / 2, z, s * 0.95, s, s * 0.95);
   }
   log(x, z, yaw, len = 4) {
+    if (this.noLife) return;
     const y = terrainHeight(x, z);
     this.put(BASE.cyl, 0x7a4f28, x, y + 0.35, z, 0.7, len, 0.7, yaw, 0, Math.PI / 2);
     this.putRel(BASE.cyl, 0xd9b27a, x, z, y, yaw, len / 2 + 0.01, 0.35, 0, 0.6, 0.02, 0.6, 0, 0, Math.PI / 2);
@@ -1385,6 +1434,7 @@ export class World {
   }
   powerPole(x, z) {
     const y = terrainHeight(x, z);
+    if (this.mode === 'lava') return new THREE.Vector3(x, -999, z);
     this.put(BASE.cyl6, 0x6b5a48, x, y + 4, z, 0.3, 8, 0.3);
     this.put(BASE.box, 0x6b5a48, x, y + 7.4, z, 2.4, 0.2, 0.2);
     this.put(BASE.sph, 0xff3020, x, y + 8.1, z, 0.3, 0.3, 0.3, 0, 0, 0, 'glow');
@@ -1392,6 +1442,7 @@ export class World {
     return new THREE.Vector3(x, y + 7.4, z);
   }
   cable(a, b) {
+    if (a.y < -100 || b.y < -100) return;
     const N = 4;
     let prev = a.clone();
     for (let i = 1; i <= N; i++) {
@@ -1435,6 +1486,12 @@ export class World {
     this.spawn = { pos: new THREE.Vector3(0, 3, 4), yaw: 0 };
     this.startCheckpoint = this._addCheckpoint(-7, 2);
     this.activateCheckpoint(this.startCheckpoint); this.startCheckpoint.flash = 0;
+    if (this.noLife) { // 사람 흔적 대신: 둥글게 선 현무암 기둥 / 금속 기둥
+      for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2, x = Math.cos(a) * 27, z = Math.sin(a) * 27; if (roadDist(x, z) < ROAD.width + 3) continue; const h = 4 + (i % 3) * 2.5; this.put(BASE.cyl6, this.mode === 'lava' ? 0x2e2826 : 0x4a515c, x, 3 + h / 2, z, 2.2, h, 2.2); this.put(BASE.cyl6, this.mode === 'lava' ? 0xff6a20 : 0xff4fd8, x, 3 + h + 0.1, z, 2.25, 0.25, 2.25, 0, 0, 0, 'glow'); this._solid(x, 3 + h / 2, z, 2, h, 2); }
+      this._occupy(0, 0, 30);
+      this._crystalSite(CRYSTAL_SITE.x, CRYSTAL_SITE.z);
+      return;
+    }
     // 출발 아치
     const y = 3;
     for (const s of [-1, 1]) {
@@ -1666,6 +1723,7 @@ export class World {
     this.treeDrain.visible = st === 2;
     if (st === 1) this.drillRig.position.y = this.drillTop;
     if (st === 3) this.heartTree.restored = true;
+    if (st === 4) { this.heartTree.restored = true; this.heartTree.glowT = 1; this.crystalGroup.visible = false; }
   }
   restoreTree() {
     if (!this.heartTree || this.heartTree.restored) return;
@@ -2324,6 +2382,7 @@ export class World {
     return box;
   }
   _lantern(x, z) {
+    if (this.noLife) return;
     const y = terrainHeight(x, z);
     this.put(BASE.cyl6, 0x5a3820, x, y + 1.5, z, 0.18, 3, 0.18);
     this.put(BASE.box, 0x3a2a1a, x, y + 3.15, z, 0.6, 0.12, 0.6);
@@ -2414,15 +2473,17 @@ export class World {
         this.put(BASE.cyl, 0xd8d2c0, px, py + hh / 2, pz, 1.3, hh, 1.3);
         if (k % 2 === 0) this.put(BASE.box, 0xc8c2b0, px, py + hh + 0.3, pz, 2.4, 0.6, 2.4, a);
       }
+      const nm = this.noLife ? `${this.mode === 'lava' ? '화산 봉우리' : '관측 갑판'} ${i + 1}` : `빛의 제단 ${i + 1}`;
       this.put(BASE.box, 0xc8c2b0, M.x, top + 0.6, M.z + 3, 3.6, 1.2, 2.6);
       this._solid(M.x, top + 0.6, M.z + 3, 3.6, 1.2, 2.6);
-      this._chest(M.x, M.z + 3, top + 1.2, `빛의 제단 ${i + 1}`);
+      this._chest(M.x, M.z + 3, top + 1.2, nm);
       const mesh = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 2.2, 260, 12, 1, true), new THREE.MeshBasicMaterial({ color: 0x9dffe0, ...beamMatBase }));
       mesh.position.set(M.x, top + 130, M.z + 3);
       this.root.add(mesh);
-      this.beacons.push({ mesh, phase: i, name: `빛의 제단 ${i + 1}` });
-      this.discoveries.push({ name: `빛의 제단 ${i + 1}`, pos: new THREE.Vector3(M.x, top, M.z), r: 30 });
+      this.beacons.push({ mesh, phase: i, name: nm });
+      this.discoveries.push({ name: nm, pos: new THREE.Vector3(M.x, top, M.z), r: 30 });
     });
+    if (this.noLife) { this.lm = lm0; return; }
     // 2) 거인의 돌다리 (노란 협곡 옆)
     {
       const cx = -760, cz = 1150, span = 22;
@@ -2839,6 +2900,8 @@ export class World {
       this._ringCircle(x, z, 16, 18);
       this._occupy(x, z, 18);
     };
+    if (this.mode === 'lava') { this._lavaMarks(add, B); this.lm = lm0; return; }
+    if (this.mode === 'ship') { this._shipMarks(add, B); this.lm = lm0; return; }
     add('시계탑', '🕰', 489, 178, (x, y, z) => {
       this.put(B.box, 0xd8c9a8, x, y + 22, z, 9, 44, 9); this.put(B.box, 0x8a6a48, x, y + 1, z, 11, 2, 11);
       for (const [dx, dz, ry] of [[0, 4.6, 0], [0, -4.6, 0], [4.6, 0, Math.PI / 2], [-4.6, 0, Math.PI / 2]]) {
@@ -3008,6 +3071,7 @@ export class World {
 
   // =================================================================
   update(dt, time) {
+    if (this.mode === 'space') return;
     for (const s of this.springs) {
       s.comp = Math.max(0, s.comp - dt * 4);
       const k = 1 - s.comp * 0.5;
@@ -3045,7 +3109,7 @@ export class World {
       const k = T.glowT;
       this.crystalMat.emissiveIntensity = (st === 2 ? 0.1 + 0.08 * Math.sin(time * 7) : 0.3) + k * (0.9 + Math.sin(time * 3) * 0.25);
       this.crystalMesh.rotation.y = time * (0.15 + k * 0.6);
-      this.crystalGroup.position.y = k * 2.5;
+      if (st !== 5) this.crystalGroup.position.y = k * 2.5; // 5 = 수호자 장면에서 직접 움직이는 중
       if (st === 1) { // 드릴이 내려가며 땅을 팜
         this.drillT += dt;
         this.drillRig.position.y = this.drillTop + (this.drillLow - this.drillTop) * Math.min(1, this.drillT / 2.2);
@@ -3128,8 +3192,8 @@ export class World {
   }
   // ---------- 다음 대지로 가는 장치: 얼음 나라 = 거대 대포, 용암 섬 = 하늘로 솟는 분출구 ----------
   _exitDevice() {
-    if (this.mode !== 'ice' && this.mode !== 'lava') return;
-    let x = 110, z = -70;
+    if (this.mode !== 'ice') return;
+    let x = SITES.lab.x + 60, z = SITES.lab.z + 50;
     for (let k = 0; k < 40 && !this._free(x, z, 14); k++) { x += 9; z -= 6; }
     const y = terrainHeight(x, z), g = new THREE.Group(); g.position.set(x, y, z); this.root.add(g);
     const mk = (geo, c, px, py, pz, sx = 1, sy = 1, sz = 1, parent = g, glow = false) => { const o = new THREE.Mesh(geo, glow ? new THREE.MeshBasicMaterial({ color: c, toneMapped: false }) : new THREE.MeshLambertMaterial({ color: c })); o.position.set(px, py, pz); o.scale.set(sx, sy, sz); o.castShadow = true; parent.add(o); return o; };
@@ -3147,7 +3211,8 @@ export class World {
       for (const s of [-1, 1]) mk(box, 0x2c3036, s * 5.5, 0, 0, 2, 5, 6, tilt);
       this.exitGlow = mk(new THREE.SphereGeometry(1.2, 10, 8), 0xff3020, 0, 7.8, 0, 1, 1, 1, g, true);
       for (let k = 0; k < 7; k++) mk(box, 0x7a8493, 0, 0.35 + k * 0.6, 12 - k * 1.1, 6, 0.7, 1.4, g); // 계단
-      this._solid(x, y + 2, z, 18, 4, 18);
+      this._cannonSolid = [x, y + 2, z, 18, 4, 18];
+      g.visible = false; // 보스를 물리치면 나타남
     } else {
       mk(new THREE.CylinderGeometry(8, 15, 7, 18), 0x2e2624, 0, 3.5, 0);
       mk(new THREE.CylinderGeometry(6.5, 6.5, 0.4, 18), 0xff6a20, 0, 7.05, 0, 1, 1, 1, g, true);
@@ -3156,14 +3221,20 @@ export class World {
       this.smokeEmitters.push({ pos: new THREE.Vector3(x, y + 9, z), rate: 1.5, dark: false });
       this._solid(x, y + 3, z, 16, 6, 16);
     }
-    this.exitDevice = { pos: new THREE.Vector3(x, y, z), r: 11, kind: this.mode === 'ice' ? 'cannon' : 'geyser', group: g, yaw, top: y + (this.mode === 'ice' ? 4 : 7) };
+    this.exitDevice = { pos: new THREE.Vector3(x, y, z), r: 11, kind: this.mode === 'ice' ? 'cannon' : 'geyser', group: g, yaw, top: y + (this.mode === 'ice' ? 4 : 7), hidden: this.mode === 'ice' };
     this.questTargets.exit = this.exitDevice.pos;
     this._occupy(x, z, 14);
+  }
+  revealExit() {
+    const X = this.exitDevice; if (!X || !X.hidden) return;
+    X.hidden = false; X.group.visible = true;
+    if (this._cannonSolid) { this._solid(...this._cannonSolid); this._cannonSolid = null; }
   }
   // 마무리: 360도 루프 근처에는 몬스터를 두지 않고, 용암·구멍 위의 링과 몬스터는 치움
   _tidySpots() {
     const nearLoop = (p) => this.loops.some((L) => Math.hypot(p.x - L.base.x, p.z - L.base.z) < 80);
     const wet = (p) => (this.mode === 'lava' || this.mode === 'sky') && terrainHeight(p.x, p.z) < 0.5;
+    if (this.mode === 'ship') { let k = 0; for (const sp of this.enemySpots) if (!sp.tag && (sp.type === 'beetle' || sp.type === 'hopper') && (k++ % 3 === 0)) sp.type = 'colossus'; }
     this.enemySpots = this.enemySpots.filter((sp) => sp.tag || sp.type === 'titan' || (!nearLoop(sp.pos) && !(wet(sp.pos) && sp.type !== 'wasp')));
     if (this.mode === 'lava' || this.mode === 'sky') this.ringSpots = this.ringSpots.filter((r) => !(r.y < 1.2 && terrainHeight(r.x, r.z) < 0.3));
     // 링 양 줄이기: 이전의 약 2/3 (한 개씩 빼지 않고 12m 칸 단위로 통째로 빼서 줄이 끊겨 보이지 않게)
@@ -3207,6 +3278,89 @@ export class World {
     this.meltPatches.push({ x: p.x, z: p.z, r, mesh });
     if (this.meltPatches.length > CFG.snow.maxPatches) { const o = this.meltPatches.shift(); this.root.remove(o.mesh); o.mesh.geometry.dispose(); }
     return true;
+  }
+
+  // ---------- 용암 섬 랜드마크: 생명의 흔적 없이, 화산이 만든 지형과 기어 군단의 채굴 시설 ----------
+  _lavaMarks(add, B) {
+    const GL = 'glow';
+    add('흑요석 첨탑', '🗡', 489, 178, (x, y, z) => { this.put(B.cone4, 0x1a1420, x, y + 35, z, 14, 70, 14, 0.3); for (let k = 0; k < 4; k++) this.put(B.cone4, 0xff5a10, x, y + 12 + k * 13, z, 14.2 - k * 2.6, 0.8, 14.2 - k * 2.6, 0.3, 0, 0, GL); this._solid(x, y + 15, z, 9, 30, 9); });
+    add('용암 폭포', '🌋', 130, 520, (x, y, z) => { this.put(B.box, 0x2e2624, x, y + 20, z, 30, 40, 14); this.put(B.box, 0xff6a20, x, y + 20, z + 7.1, 9, 40, 0.3, 0, 0, 0, GL); this.put(B.cyl, 0xffa030, x, y + 0.3, z + 12, 16, 0.6, 10, 0, 0, 0, GL); this._solid(x, y + 20, z, 30, 40, 14); });
+    add('현무암 아치', '🌉', -398, 334, (x, y, z) => { for (const s of [-1, 1]) { this.put(B.cyl6, 0x3a3432, x + s * 14, y + 14, z, 7, 28, 7); this._solid(x + s * 14, y + 14, z, 6, 28, 6); } this.put(B.box, 0x2e2826, x, y + 30, z, 36, 6, 8); this.put(B.box, 0xff6a20, x, y + 27.2, z, 30, 0.4, 8.2, 0, 0, 0, GL); this._plat(x, y + 33, z, 36, 8, 0x2e2826, 0x3a3432); });
+    add('불꽃 수정 동굴', '💎', -489, -178, (x, y, z) => { this.put(B.hemi, 0x2e2624, x, y - 2, z, 34, 22, 34); for (let k = 0; k < 9; k++) { const a = k / 9 * 6.28; this.put(B.cone4, k % 2 ? 0xff4a1a : 0xffa030, x + Math.cos(a) * 15, y + 8, z + Math.sin(a) * 15, 3, 14 + (k % 3) * 5, 3, a, Math.cos(a) * 0.4, Math.sin(a) * 0.4, GL); } });
+    add('거대 용암 기둥', '🔥', -90, -540, (x, y, z) => { this.put(B.cyl6, 0x2e2826, x, y + 26, z, 12, 52, 12); this.put(B.torus, 0xff6a20, x, y + 53, z, 14, 14, 14, 0, Math.PI / 2, 0, GL); this.put(B.cyl6, 0xffa030, x, y + 52.5, z, 9, 0.6, 9, 0, 0, 0, GL); this._solid(x, y + 26, z, 10, 52, 10); });
+    add('기어 채굴탑', '🏗', 398, -334, (x, y, z) => { for (const sx of [-1, 1]) for (const sz of [-1, 1]) this.put(B.box, 0x50565f, x + sx * 6, y + 20, z + sz * 6, 1.4, 40, 1.4); this.put(B.box, 0xffc233, x, y + 40, z, 15, 2, 15); this.put(B.cone, 0xd8dde3, x, y + 8, z, 6, 12, 6, 0, Math.PI); this.put(B.sph, 0xff3020, x, y + 42, z, 1.6, 1.6, 1.6, 0, 0, 0, GL); this._solid(x, y + 20, z, 14, 40, 14); });
+    add('쌍둥이 화산', '🌋', 1150, 0, (x, y, z) => { for (const s of [-1, 1]) { this.put(B.cone, 0x2e2624, x + s * 22, y + 18, z, 36, 36, 36); this.put(B.cyl, 0xff6a20, x + s * 22, y + 35.5, z, 8, 1, 8, 0, 0, 0, GL); this.smokeEmitters.push({ pos: new THREE.Vector3(x + s * 22, y + 38, z), rate: 1.2, dark: true }); } });
+    add('부서진 운석', '☄', 813, 813, (x, y, z) => { this.put(B.ico1, 0x241e1c, x, y + 6, z, 30, 26, 30); for (let k = 0; k < 6; k++) this.put(B.box, 0xff5a10, x + (k - 2.5) * 4, y + 12 + (k % 2) * 6, z + 14.5, 0.6, 9, 0.4, 0, 0, 0.6 - k * 0.2, GL); });
+    add('용암 분수', '⛲', 20, 1150, (x, y, z) => { this.put(B.cyl, 0x2e2624, x, y + 3, z, 20, 6, 20); this.put(B.cyl, 0xff6a20, x, y + 6.1, z, 16, 0.3, 16, 0, 0, 0, GL); this.put(B.cone, 0xffa030, x, y + 16, z, 3, 20, 3, 0, 0, 0, GL); this._solid(x, y + 3, z, 18, 6, 18); });
+    add('유황 굴뚝', '🟡', -813, 813, (x, y, z) => { for (let k = 0; k < 6; k++) { const a = k / 6 * 6.28, h = 14 + (k % 3) * 8; this.put(B.cyl, 0x5a5030, x + Math.cos(a) * 9, y + h / 2, z + Math.sin(a) * 9, 4, h, 4); this.put(B.cyl, 0xffe14d, x + Math.cos(a) * 9, y + h, z + Math.sin(a) * 9, 4.2, 0.6, 4.2, 0, 0, 0, GL); this.smokeEmitters.push({ pos: new THREE.Vector3(x + Math.cos(a) * 9, y + h + 1, z + Math.sin(a) * 9), rate: 0.5, dark: false }); } });
+    add('흑요석 거울벽', '🪞', -1150, 0, (x, y, z) => { this.put(B.box, 0x0e0a14, x, y + 20, z, 4, 40, 34, 0, 0, 0.15); this.put(B.box, 0x2a2440, x + 2.1, y + 20, z, 0.2, 38, 32, 0, 0, 0.15); this._solid(x, y + 20, z, 6, 40, 34); });
+    add('기어 송신탑', '📡', -813, -813, (x, y, z) => { this.put(B.cyl6, 0x3a4048, x, y + 25, z, 2, 50, 2); this.put(B.hemi, 0xb0b6be, x, y + 46, z, 12, 4, 12, 0, 1.1); this.put(B.sph, 0xff3020, x, y + 51, z, 1.4, 1.4, 1.4, 0, 0, 0, GL); this._solid(x, y + 25, z, 3, 50, 3); });
+    add('불의 고리', '⭕', 813, -813, (x, y, z) => { this.put(B.torus, 0x2e2826, x, y + 18, z, 32, 32, 32); this.put(B.torus, 0xff6a20, x, y + 18, z, 30, 30, 10, 0, 0, 0, GL); });
+  }
+  // ---------- 우주선 랜드마크: 반응로·함교·포탑 같은 거대 기계 ----------
+  _shipMarks(add, B) {
+    const GL = 'glow', N1 = 0xff4fd8, N2 = 0x4fd8ff;
+    add('반응로 코어', '⚛', 489, 178, (x, y, z) => { this.put(B.cyl, 0x3a4048, x, y + 3, z, 30, 6, 30); this.put(B.sph, N2, x, y + 18, z, 18, 18, 18, 0, 0, 0, GL); for (let k = 0; k < 3; k++) this.put(B.torus, 0x5d6572, x, y + 18, z, 28, 28, 28, k, k * 1.1, 0); this._solid(x, y + 3, z, 28, 6, 28); });
+    add('함교 탑', '🏢', 130, 520, (x, y, z) => { this.put(B.box, 0x4a515c, x, y + 30, z, 18, 60, 18); this.put(B.box, N1, x, y + 50, z + 9.1, 14, 3, 0.2, 0, 0, 0, GL); this.put(B.box, 0x2a2e35, x, y + 62, z, 26, 4, 26); this._solid(x, y + 30, z, 18, 60, 18); });
+    add('거대 포탑', '🔫', -398, 334, (x, y, z) => { this.put(B.cyl, 0x3a4048, x, y + 6, z, 22, 12, 22); this.put(B.hemi, 0x5d6572, x, y + 12, z, 18, 10, 18); for (const s of [-1, 1]) this.put(B.cyl, 0x2a2e35, x + s * 4, y + 16, z + 16, 2.4, 26, 2.4, 0, Math.PI / 2 - 0.3); this._solid(x, y + 6, z, 20, 12, 20); });
+    add('격납고', '🛸', -489, -178, (x, y, z) => { this.put(B.box, 0x4a515c, x, y + 14, z, 50, 28, 36); this.put(B.box, 0x111318, x, y + 10, z + 18.1, 30, 20, 0.3); this.put(B.box, N2, x, y + 21, z + 18.2, 30, 0.6, 0.3, 0, 0, 0, GL); this._solid(x, y + 14, z, 50, 28, 36); });
+    add('에너지 기둥', '⚡', -90, -540, (x, y, z) => { this.put(B.cyl6, 0x3a4048, x, y + 30, z, 8, 60, 8); this.put(B.cyl6, N1, x, y + 30, z, 8.3, 50, 2, 0, 0, 0, GL); this._solid(x, y + 30, z, 7, 60, 7); });
+    add('레이더 접시', '📡', 398, -334, (x, y, z) => { this.put(B.cyl6, 0x3a4048, x, y + 12, z, 3, 24, 3); this.put(B.hemi, 0xb0b6be, x, y + 26, z, 22, 6, 22, 0, 1.0); this.put(B.sph, N1, x, y + 30, z, 1.5, 1.5, 1.5, 0, 0, 0, GL); this._solid(x, y + 12, z, 4, 24, 4); });
+    add('엔진 노즐', '🚀', 1150, 0, (x, y, z) => { this.put(B.cyl, 0x2a2e35, x, y + 18, z, 36, 36, 36, 0, 0, Math.PI / 2); this.put(B.cyl, N2, x - 18.5, y + 18, z, 26, 0.8, 26, 0, 0, Math.PI / 2, GL); });
+    add('사령관 동상', '🗿', 813, 813, (x, y, z) => { this.put(B.box, 0x3a4048, x, y + 4, z, 16, 8, 16); this.put(B.cyl, 0x6a4a9a, x, y + 22, z, 8, 28, 8); this.put(B.sph, 0x6a4a9a, x, y + 40, z, 9, 10, 9); this.put(B.sph, 0xff3020, x + 2, y + 41, z + 4, 2, 2, 1, 0, 0, 0, GL); this._solid(x, y + 4, z, 16, 8, 16); });
+    add('워프 게이트', '🌀', 20, 1150, (x, y, z) => { this.put(B.torus, 0x4a515c, x, y + 24, z, 44, 44, 44); this.put(B.torus, N1, x, y + 24, z, 40, 40, 8, 0, 0, 0, GL); });
+    add('냉각 탑', '❄', -813, 813, (x, y, z) => { for (let k = 0; k < 3; k++) { this.put(B.cyl, 0x5d6572, x + (k - 1) * 16, y + 15, z, 12, 30, 12); this.put(B.cyl, N2, x + (k - 1) * 16, y + 30.2, z, 10, 0.4, 10, 0, 0, 0, GL); this.smokeEmitters.push({ pos: new THREE.Vector3(x + (k - 1) * 16, y + 32, z), rate: 0.6, dark: false }); } });
+    add('로봇 조립대', '🤖', -1150, 0, (x, y, z) => { this.put(B.box, 0x3a4048, x, y + 2, z, 40, 4, 20); for (let k = 0; k < 4; k++) { this.put(B.box, 0x5a6478, x - 15 + k * 10, y + 9, z, 4, 10, 3); this.put(B.sph, 0xff2a10, x - 15 + k * 10, y + 15, z + 1.5, 0.8, 0.8, 0.4, 0, 0, 0, GL); } this._solid(x, y + 2, z, 40, 4, 20); });
+    add('중력 구체', '🔮', -813, -813, (x, y, z) => { this.put(B.sph, 0x9a5aff, x, y + 26, z, 20, 20, 20, 0, 0, 0, GL); this.put(B.cyl, 0x3a4048, x, y + 3, z, 14, 6, 14); });
+    add('보급 창고', '📦', 813, -813, (x, y, z) => { for (let k = 0; k < 8; k++) this.put(B.box, [0x5d6572, 0xffc233, 0x3a6fd0][k % 3], x + (k % 4) * 9 - 13, y + 4 + Math.floor(k / 4) * 8, z, 8, 8, 8); this._solid(x, y + 8, z, 36, 16, 8); });
+  }
+  // ---------- 우주선 외벽: 아주 높아서 못 넘음. 슈퍼 상태로 부딪히면 캐릭터만 지나갈 구멍이 뚫림 (저장됨) ----------
+  _hull() {
+    const Rb = CFG.world.barrierR, segW = 24, N = Math.ceil(Math.PI * 2 * Rb / segW), H = 90;
+    const panel = new THREE.InstancedMesh(new THREE.BoxGeometry(segW + 0.6, H, 2.5), new THREE.MeshLambertMaterial({ color: 0x3a3f4a }), N);
+    const neon = new THREE.InstancedMesh(new THREE.BoxGeometry(segW + 0.7, 0.8, 2.6), new THREE.MeshBasicMaterial({ color: 0xff4fd8, toneMapped: false }), N * 2);
+    let ni = 0;
+    for (let i = 0; i < N; i++) {
+      const a = i / N * Math.PI * 2, x = Math.cos(a) * Rb, z = Math.sin(a) * Rb, y = terrainHeight(x * 0.995, z * 0.995) - 2, yaw = -a + Math.PI / 2;
+      _m.compose(_p.set(x, y + H / 2, z), _q.setFromEuler(_e.set(0, yaw, 0)), _s.set(1, 1, 1)); panel.setMatrixAt(i, _m);
+      for (const hy of [8, 30]) { _m.compose(_p.set(x, y + hy, z), _q.setFromEuler(_e.set(0, yaw, 0)), _s.set(1, 1, 1)); neon.setMatrixAt(ni++, _m); }
+    }
+    panel.instanceMatrix.needsUpdate = true; neon.instanceMatrix.needsUpdate = true;
+    this.barrierGroup.add(panel, neon);
+    this.holeGroup = new THREE.Group(); this.root.add(this.holeGroup);
+    for (const h of this.hullHoles) this._holeMesh(h);
+  }
+  _holeMesh(h) {
+    const Rb = CFG.world.barrierR, g = new THREE.Group();
+    if (!this._holeMats) this._holeMats = { space: new THREE.MeshBasicMaterial({ color: 0x02030a, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -6 }), rim: new THREE.MeshBasicMaterial({ color: 0xff8a30, toneMapped: false }) };
+    for (const off of [-1.32, 1.32]) {
+      const d = new THREE.Mesh(new THREE.CircleGeometry(1.3, 14), this._holeMats.space); d.position.set(0, 0, off); g.add(d);
+      const r = new THREE.Mesh(new THREE.TorusGeometry(1.35, 0.14, 4, 14), this._holeMats.rim); r.position.set(0, 0, off * 1.01); g.add(r);
+    }
+    g.position.set(Math.cos(h.a) * Rb, h.y + 1.3, Math.sin(h.a) * Rb);
+    g.rotation.y = -h.a + Math.PI / 2;
+    g.scale.set(1, 1.25, 1);
+    this.holeGroup.add(g);
+  }
+  breakHull(a, y) {
+    const Rb = CFG.world.barrierR;
+    if (this.hullHoles.some((h) => Math.abs(Math.atan2(Math.sin(a - h.a), Math.cos(a - h.a))) * Rb < 3)) return false;
+    const gy = terrainHeight(Math.cos(a) * (Rb - 4), Math.sin(a) * (Rb - 4));
+    const h = { a: +a.toFixed(5), y: +Math.max(gy, Math.min(y, gy + 0.5)).toFixed(2) };
+    this.hullHoles.push(h); this._holeMesh(h);
+    return h;
+  }
+  // ---------- 6스테이지(우주): 땅 없이 최소한만 ----------
+  _buildSpace() {
+    this.terrain = { lods: [{ step: 4 }], update() {}, chunks: new Map() };
+    this.trees = { round: { nearR: 300 } }; this.treeSets = []; this.treeTypes = [];
+    this.spawn = { pos: new THREE.Vector3(0, 0, 0), yaw: 0 };
+    this.startCheckpoint = { pos: new THREE.Vector3(0, 0, 0), active: true };
+    this.barrierGroup = new THREE.Group(); this.barrierUp = false;
+    this.heartTree = null; this.questTargets = { base: new THREE.Vector3(), factory: new THREE.Vector3(), lab: new THREE.Vector3(), camp: new THREE.Vector3(), crystal: new THREE.Vector3(), heartTree: new THREE.Vector3(), bigStar: new THREE.Vector3(0, -999, 0) };
+    this.labPad = new THREE.Vector3(); this.exitGate = new THREE.Vector3();
+    const cv = document.createElement('canvas'); cv.width = cv.height = 8; cv.getContext('2d').fillRect(0, 0, 8, 8);
+    this.mapCanvas = cv; this.mapHalf = 1800;
   }
 
   removeBarrier() {

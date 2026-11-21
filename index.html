@@ -188,7 +188,17 @@
   .slot-empty { opacity: .7; }
   .pmenu-toast { position: fixed; top: 20%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.75); padding: 10px 20px; border-radius: 20px; font-weight: 900; }
   #continue-btn { text-align: center; }
-  #load-list { display: flex; flex-direction: column; gap: 6px; }
+  #load-list { display: flex; flex-direction: column; gap: 6px; max-height: 42vh; overflow-y: auto; }
+  .ngp { background: linear-gradient(90deg, #ff4fd8, #ffd23a); color: #2a1040; border-radius: 8px; padding: 0 6px; font-weight: 900; }
+  #ending { position: fixed; inset: 0; z-index: 60; display: none; align-items: center; justify-content: center; flex-direction: column; background: rgba(0,0,0,0.82); color: #fff; text-align: center; font-weight: 800; padding: 20px; }
+  #ending.on { display: flex; }
+  #ending h1 { font-size: clamp(28px, 6vw, 56px); margin: 0 0 14px; background: linear-gradient(90deg, #ffd23a, #ff4fd8, #4fd8ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  #ending p { font-size: clamp(14px, 2.6vw, 20px); margin: 6px 0; max-width: 720px; line-height: 1.5; }
+  #ending button { margin-top: 18px; font-size: 20px; font-weight: 900; padding: 12px 28px; border-radius: 16px; border: 3px solid #fff; background: #ffb02e; color: #fff; }
+  #shmup-hud { position: fixed; left: 50%; bottom: calc(8px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20; display: none; gap: 10px; color: #fff; font-weight: 900; text-shadow: 0 2px 3px #000; font-size: 15px; }
+  body.shmup #shmup-hud { display: flex; }
+  body.shmup .minimap, body.shmup #bigmap { display: none !important; }
+  #shmup-hud span { background: rgba(0,0,0,0.45); padding: 4px 10px; border-radius: 10px; }
   /* 시네마틱 */
   .cine { position: fixed; inset: 0; z-index: 15; display: none; }
   .cine.on { display: block; }
@@ -352,5 +362,7 @@
 <div id="rotate-hint"><div class="ico">📱</div>휴대폰을 가로로 돌려 주세요!<small style="font-size:14px;opacity:.8">게임은 가로 화면에서 해요</small></div>
 <script src="./vendor/peerjs.min.js"></script>
 <script type="module" src="./src/main.js"></script>
+<div id="ending"></div>
+<div id="shmup-hud"><span id="sh-dash">A 대시</span><span id="sh-aura">B 오로라</span><span id="sh-bomb">C 궁극기</span><span id="sh-wave"></span></div>
 </body>
 </html>
