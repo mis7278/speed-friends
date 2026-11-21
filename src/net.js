@@ -201,7 +201,7 @@ export class Net {
         if (this.host) this._roster();
         return;
       case 'bye': this._remove(m.id); this._changed(); return;
-      case 'eh': case 'rg': case 'bh': case 'ep': case 'bp':
+      case 'eh': case 'rg': case 'bh': case 'ep': case 'bp': case 'tb': case 'wb': case 'ch':
         if (this.host && m.t !== 'ep' && m.t !== 'bp') this._broadcast(m, conn.peer);
         this.h.onGame?.(m);
         return;

@@ -881,7 +881,7 @@ export class Player {
       }
       this.vel.y -= grav * dt;
       if (this.flying) this.vel.y = Math.max(this.vel.y, -F.fallSpeed); // 서서히 내려옴
-      if (this.gliding) this.vel.y = Math.max(this.vel.y, -CFG.power.glideFall);
+      if (this.gliding) this.vel.y = Math.max(this.vel.y, -(this.superOn ? CFG.power.superGlideFall : CFG.power.glideFall)); // 슈퍼 활강은 빠른 대신 조금 빨리 내려옴
       const superGlide = this.gliding && this.superOn;
       const tgtBase = superGlide ? CFG.power.superGlideSpeed : this.gliding ? CFG.power.glideSpeed * this.mul() : this.flying ? this.cap(2) : this.maxSpeed() * 0.75;
       if (superGlide) this.superGlideTick(dt);
@@ -1080,6 +1080,7 @@ export class Player {
     if (!this.superOn && !(this.attacking || sp > this.cap(1) * 0.6)) return false;
     const W = this.game.world;
     if (!W.breakTree(t)) return false;
+    if (this.game.net?.shared) this.game.net.sendGame({ t: 'tb', k: t.ref.type, i: t.ref.idx }); // 친구 화면에서도 부서짐
     const set = t.ref.set, top = new THREE.Vector3(t.x, t.y + (t.ref.kind === 'rock' ? 0.8 : 3), t.z);
     if (t.ref.kind === 'rock') { this.game.fx.burst(top, 0x8f8b80, 22, 9); this.game.fx.burst(top, 0x6d6a62, 12, 6); }
     else { this.game.fx.burst(top, 0x8b5a2b, 14, 8); this.game.fx.leaves(top.clone().setY(t.y + 4), set.leaf, 26); }
@@ -1138,8 +1139,9 @@ export class Player {
     if (ok) this.breakWall(w);
     else if (!w.house && !this._wallHint) { this._wallHint = true; this.game.hud.toast('금 간 벽! 파워형이나 슈퍼 상태면 부술 수 있어요'); setTimeout(() => (this._wallHint = false), 6000); }
   }
-  breakWall(w) {
+  breakWall(w, remote = false) {
     if (w.dead) return;
+    if (!remote && this.game.net?.shared) this.game.net.sendGame({ t: 'wb', i: this.game.world.walls.indexOf(w) });
     w.dead = true; w.mesh.visible = false;
     const c = w.min.clone().add(w.max).multiplyScalar(0.5);
     if (w.house) { // 나무집: 나뭇조각이 우수수, 가끔 링 주머니

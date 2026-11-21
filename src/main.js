@@ -149,6 +149,12 @@ function boot() {
     const E = game.enemies;
     if (m.t === 'eh') { const e = E.list[m.i | 0]; if (e && Array.isArray(m.f)) E.hit(e, +m.d || 1, new THREE.Vector3(+m.f[0] || 0, +m.f[1] || 0, +m.f[2] || 0), +m.k || 10, !!m.l, true); }
     else if (m.t === 'rg') game.rings.takeRemote(m.i | 0);
+    else if (m.t === 'tb') { // 친구가 부순 나무·바위
+      const set = W.trees[m.k]; const ref = set && W.breakables.find((r) => r.set === set && r.idx === (m.i | 0));
+      if (ref?.collider && W.breakTree(ref.collider)) { const t = ref.collider; game.fx.burst(new THREE.Vector3(t.x, t.y + 2, t.z), ref.kind === 'rock' ? 0x8f8b80 : 0x8b5a2b, 14, 8); }
+    }
+    else if (m.t === 'wb') { const w = W.walls[m.i | 0]; if (w && !w.dead) pl.breakWall(w, true); }
+    else if (m.t === 'ch') { const c = W.chests[m.i | 0]; if (c && !c.opened) { c.opened = true; const b = W.beacons.find((x) => x.name === c.name); if (b) b.found = true; game.hud.toast(`🎁 친구가 「${c.name}」 보물 상자를 열었어요!`); } }
     else if (m.t === 'bh') game.boss?.damage(+m.n || 1, null, true);
     else if (m.t === 'ep' && !net.host && Array.isArray(m.a)) {
       for (let k = 0; k + 4 < m.a.length; k += 5) {
@@ -398,17 +404,18 @@ function boot() {
     const go = () => { Q.introEnd?.(); Q.start?.(); game.hud.setQuest(i < 5 ? `퀘스트 ${i + 1} / 5 — ${Q.title}` : Q.title, questText(Q)); SFX.quest(); };
     if (Q.intro && !skipIntro) playCine(Q.intro(), go); else go();
   }
-  function completeQuest() {
+  function completeQuest(byFriend = false) {
     const Q = quests[q.i];
-    SFX.quest(); game.hud.toast('✅ 퀘스트 완료!', 'gold');
+    if (cine.active) cine.skip();
+    SFX.quest(); game.hud.toast(byFriend ? '🤝 친구가 퀘스트를 깼어요! ✅ 퀘스트 완료!' : '✅ 퀘스트 완료!', 'gold');
     q.i = -2; // 잠깐 멈춤
     const idx = quests.indexOf(Q);
     q.pending = idx + 1;
-    net.sendQuest(idx + 1); // 같이 하는 친구들도 다 같이 다음 퀘스트로
-    const next = () => { Q.outroEnd?.(); if (q.i === -2) startQuest(idx + 1); };
+    if (!byFriend) net.sendQuest(idx + 1); // 같이 하는 친구들도 같은 장면을 보고 다 같이 다음 퀘스트로
+    const next = () => { Q.outroEnd?.(); if (byFriend) applyQuestEffects(idx + 1); if (q.i === -2) startQuest(idx + 1); };
     if (Q.outro) setTimeout(() => playCine(Q.outro(), next), 900); else next();
   }
-  game.quests = q; game.startQuest = startQuest;
+  game.quests = q; game.startQuest = startQuest; game.completeQuest = completeQuest;
   // 이미 지나간 퀘스트의 결과를 맵에 반영 (불러오기·친구가 퀘스트를 깼을 때)
   function applyQuestEffects(n) {
     const dead = (tag) => { const c = core(tag); if (c) { c.alive = false; if (c.mesh) c.mesh.visible = false; c.shielded = false; } };
@@ -420,6 +427,9 @@ function boot() {
   function syncQuest(n, fromFriend) {
     const cur = q.i >= 0 ? q.i : (q.pending ?? 0);
     if (!started || n <= cur || n >= quests.length + 1) return;
+    // 바로 다음 퀘스트면: 깬 친구와 똑같이 끝 장면(시네마) → 다음 퀘스트 시작 장면까지 모두 같이
+    if (n === cur + 1 && q.i === cur && quests[cur]) { completeQuest(true); return; }
+    // 한참 뒤에 들어온 경우만 결과를 바로 맞춤
     applyQuestEffects(n);
     if (cine.active) cine.skip();
     q.pending = n;
@@ -633,6 +643,7 @@ function boot() {
   const chestTotal = W.chests.length, placeTotal = W.discoveries.length;
   function openChest(ch) {
     ch.opened = true;
+    if (net.shared) net.sendGame({ t: 'ch', i: W.chests.indexOf(ch) });
     const n = 40;
     pl.collectRing(n);
     if (Math.random() < 0.35) game.pickups.spawnHeart(ch.pos.clone().add(V(0, 2, 0)));
