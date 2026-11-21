@@ -5,14 +5,16 @@ export const BIG_CRYSTALS = [
   { name: '숲의 크리스탈', color: '#3ddc5a', emoji: '🟢' },
   { name: '얼음의 크리스탈', color: '#4fb8ff', emoji: '🔵' },
   { name: '불꽃의 크리스탈', color: '#ff5a3a', emoji: '🔴' },
-  { name: '들판의 크리스탈', color: '#ffd23a', emoji: '🟡' },
-  { name: '하늘의 크리스탈', color: '#b070ff', emoji: '🟣' },
+  { name: '하늘의 크리스탈', color: '#ffd23a', emoji: '🟡' },
+  { name: '다섯째 크리스탈', color: '#b070ff', emoji: '🟣' },
+  { name: '여섯째 크리스탈', color: '#ffffff', emoji: '⚪' },
 ];
 
 export function loadProgress() {
   let p = null;
   try { p = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) {}
-  if (!p || !Array.isArray(p.crystals)) p = { crystals: [false, false, false, false, false], hardUnlocked: false, hardCrystals: [false, false, false, false, false] };
+  if (!p || !Array.isArray(p.crystals)) p = { crystals: [], hardUnlocked: false, hardCrystals: [] };
+  for (const k of ['crystals', 'hardCrystals']) { if (!Array.isArray(p[k])) p[k] = []; while (p[k].length < BIG_CRYSTALS.length) p[k].push(false); }
   return p;
 }
 // 가 본 대지 (월드 선택에서 고를 수 있음)

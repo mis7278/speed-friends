@@ -1,5 +1,5 @@
-// 몬스터: 기계로 개조된 숲 동물들. 구역 색과 어울리는 종류가 나옴.
-//  들판(초록) = 딱정벌레 로봇 / 녹슨 공장(주황) = 드릴 탱크 / 보라 늪 = 말벌 로봇 / 노란 협곡·호수 = 개구리 로봇
+// 몬스터: 닥터 기어의 로봇들 (안에 숲 동물이 갇혀 있음). 모두 '로봇' 모양.
+//  병정 로봇(beetle) / 육중한 전투 로봇(brute) / 드릴 탱크(tank) / 드론 로봇(wasp) / 스프링 로봇(hopper) / 미사일 로봇(gunner) / 거인 로봇(titan, 하늘 도시 끝)
 import * as THREE from '../vendor/three.module.js';
 import { CFG } from './config.js';
 import { SFX } from './audio.js';
@@ -17,18 +17,89 @@ const G = {
   cyl: new THREE.CylinderGeometry(1, 1, 1, 12), box: new THREE.BoxGeometry(1, 1, 1), cone: new THREE.ConeGeometry(1, 1, 10),
 };
 
-function beetleMesh() { // 무당벌레 로봇
+// 다리 (엉덩이를 중심으로 앞뒤로 흔들림)
+function leg(g, x, y, len, w, color, foot, ph) {
+  const piv = new THREE.Group(); piv.position.set(x, y, 0); g.add(piv);
+  piv.add(mesh(G.box, mat(color), 0, -len / 2, 0, w, len, w));
+  piv.add(mesh(G.box, mat(foot), 0, -len + 0.08, 0.12, w * 1.4, 0.18, w * 2));
+  piv.userData.ph = ph;
+  return piv;
+}
+function soldierMesh() { // 병정 로봇: 두 발로 걷는 네모난 로봇 (빨간 가슴판 + 파란 눈 바이저)
   const g = new THREE.Group();
-  g.add(mesh(G.hemi, mat(0xe84545), 0, 0.35, 0, 0.9, 0.75, 1.0));
-  g.add(mesh(G.box, mat(0x222222), 0, 0.75, 0, 0.06, 0.5, 1.9));
-  for (const [x, z] of [[0.4, 0.3], [-0.4, 0.3], [0.35, -0.4], [-0.35, -0.4]]) g.add(mesh(G.sph, mat(0x222222), x, 0.85, z, 0.14, 0.06, 0.14));
-  g.add(mesh(G.sph, mat(0x50565f), 0, 0.5, 0.8, 0.45, 0.4, 0.4));
-  g.add(mesh(G.sph, glow(0x66ffff), 0.18, 0.6, 1.12, 0.1, 0.1, 0.06));
-  g.add(mesh(G.sph, glow(0x66ffff), -0.18, 0.6, 1.12, 0.1, 0.1, 0.06));
-  g.add(mesh(G.cyl, mat(0x444a55), 0, 0.3, 0, 0.95, 0.2, 1.05));
-  const legs = [];
-  for (const s of [-1, 1]) for (const z of [0.4, 0, -0.4]) { const l = mesh(G.box, mat(0x50565f), s * 0.95, 0.2, z, 0.5, 0.08, 0.08); l.rotation.z = s * 0.4; g.add(l); legs.push(l); }
-  g.userData.legs = legs;
+  const legs = [leg(g, 0.28, 0.75, 0.72, 0.24, 0x3a4048, 0x2c3036, 0), leg(g, -0.28, 0.75, 0.72, 0.24, 0x3a4048, 0x2c3036, Math.PI)];
+  g.add(mesh(G.box, mat(0x50565f), 0, 0.82, 0, 0.8, 0.2, 0.5));               // 허리
+  g.add(mesh(G.box, mat(0x6d737c), 0, 1.25, 0, 0.95, 0.75, 0.62));            // 몸통
+  g.add(mesh(G.box, mat(0xd8402a), 0, 1.3, 0.32, 0.6, 0.45, 0.04));            // 가슴판
+  g.add(mesh(G.sph, glow(0xffd040), 0, 1.3, 0.35, 0.1, 0.1, 0.03));
+  g.add(mesh(G.box, mat(0x50565f), 0, 1.86, 0, 0.62, 0.48, 0.55));            // 머리
+  g.add(mesh(G.box, glow(0x56e8ff), 0, 1.9, 0.28, 0.48, 0.13, 0.03));          // 눈 바이저
+  g.add(mesh(G.cyl, mat(0x3a4048), 0, 2.22, 0, 0.03, 0.3, 0.03));              // 안테나
+  g.add(mesh(G.sph, glow(0xff3020), 0, 2.4, 0, 0.07, 0.07, 0.07));
+  const arms = [];
+  for (const s of [-1, 1]) {
+    const piv = new THREE.Group(); piv.position.set(s * 0.6, 1.5, 0); g.add(piv);
+    piv.add(mesh(G.box, mat(0x50565f), 0, -0.3, 0, 0.2, 0.6, 0.2));
+    piv.add(mesh(G.sph, mat(0x3a4048), 0, -0.68, 0, 0.16, 0.16, 0.16));
+    piv.userData.ph = s > 0 ? Math.PI : 0; arms.push(piv);
+  }
+  g.userData.legs = [...legs, ...arms];
+  return g;
+}
+function droneMesh() { // 드론 로봇: 네 개의 프로펠러로 떠다님 (가운데 빨간 카메라 눈)
+  const g = new THREE.Group();
+  g.add(mesh(G.sph, mat(0x8a4dff), 0, 0, 0, 0.6, 0.38, 0.6));
+  g.add(mesh(G.cyl, mat(0x3a4048), 0, -0.05, 0, 0.66, 0.12, 0.66));
+  g.add(mesh(G.sph, mat(0x2c3036), 0, -0.1, 0.5, 0.26, 0.26, 0.2));
+  g.add(mesh(G.sph, glow(0xff3020), 0, -0.1, 0.66, 0.13, 0.13, 0.05));
+  const rotors = [];
+  for (const [x, z] of [[0.85, 0.85], [-0.85, 0.85], [0.85, -0.85], [-0.85, -0.85]]) {
+    const arm = mesh(G.box, mat(0x50565f), x / 2, 0.05, z / 2, 0.12, 0.08, 1.15); arm.rotation.y = Math.atan2(x, z); g.add(arm);
+    g.add(mesh(G.cyl, mat(0x3a4048), x, 0.1, z, 0.12, 0.2, 0.12));
+    const r = new THREE.Group(); r.position.set(x, 0.24, z); g.add(r);
+    r.add(mesh(G.box, mat(0xffd23a), 0, 0, 0, 0.9, 0.03, 0.12));
+    r.add(mesh(G.box, mat(0xffd23a), 0, 0, 0, 0.12, 0.03, 0.9));
+    rotors.push(r);
+  }
+  for (const s of [-1, 1]) g.add(mesh(G.box, mat(0x2c3036), s * 0.25, -0.5, 0, 0.06, 0.3, 0.5)); // 착륙 다리
+  g.userData.rotors = rotors;
+  return g;
+}
+function springMesh() { // 스프링 로봇: 용수철 다리로 콩콩 뛰는 깡통 로봇
+  const g = new THREE.Group();
+  for (let i = 0; i < 4; i++) { const t = mesh(new THREE.TorusGeometry(0.35, 0.07, 6, 14), mat(0xc8ccd4), 0, 0.15 + i * 0.16, 0); t.rotation.x = Math.PI / 2; g.add(t); }
+  g.add(mesh(G.cyl, mat(0x2c3036), 0, 0.06, 0, 0.5, 0.12, 0.5));
+  g.add(mesh(G.cyl, mat(0x7ac043), 0, 1.15, 0, 0.62, 0.9, 0.62));              // 깡통 몸
+  g.add(mesh(G.cyl, mat(0xffc233), 0, 0.78, 0, 0.64, 0.12, 0.64));
+  g.add(mesh(G.hemi, mat(0x50565f), 0, 1.6, 0, 0.62, 0.45, 0.62));            // 머리 뚜껑
+  for (const s of [-1, 1]) {
+    g.add(mesh(G.cyl, mat(0x2c3036), s * 0.25, 1.25, 0.55, 0.15, 0.1, 0.15).rotateX(Math.PI / 2));
+    g.add(mesh(G.sph, glow(0xffe14d), s * 0.25, 1.25, 0.61, 0.11, 0.11, 0.04));
+    g.add(mesh(G.box, mat(0x50565f), s * 0.72, 1.1, 0, 0.18, 0.5, 0.18));
+  }
+  g.add(mesh(G.cyl, mat(0x3a4048), 0, 2.15, 0, 0.03, 0.4, 0.03));
+  g.add(mesh(G.sph, glow(0x66ffff), 0, 2.38, 0, 0.09, 0.09, 0.09));
+  return g;
+}
+function bruteMesh() { // 육중한 전투 로봇: 큰 어깨, 주먹, 빨간 외눈
+  const g = new THREE.Group();
+  const legs = [leg(g, 0.45, 1.0, 0.95, 0.42, 0x3a4048, 0x2c3036, 0), leg(g, -0.45, 1.0, 0.95, 0.42, 0x3a4048, 0x2c3036, Math.PI)];
+  g.add(mesh(G.box, mat(0x2c3036), 0, 1.1, 0, 1.2, 0.3, 0.7));
+  g.add(mesh(G.box, mat(0x5a6478), 0, 1.85, 0, 1.6, 1.2, 1.0));               // 몸통
+  g.add(mesh(G.box, mat(0xffc233), 0, 1.45, 0.51, 1.62, 0.18, 0.04));
+  g.add(mesh(G.box, mat(0x3a4048), 0, 2.15, 0.52, 0.9, 0.5, 0.04));
+  g.add(mesh(G.box, mat(0x5a6478), 0, 2.68, 0.1, 0.7, 0.5, 0.62));            // 머리
+  g.add(mesh(G.sph, glow(0xff2a10), 0, 2.7, 0.42, 0.17, 0.17, 0.06));          // 외눈
+  const arms = [];
+  for (const s of [-1, 1]) {
+    g.add(mesh(G.sph, mat(0x7a8493), s * 1.0, 2.3, 0, 0.45, 0.42, 0.45));     // 어깨
+    const piv = new THREE.Group(); piv.position.set(s * 1.05, 2.15, 0); g.add(piv);
+    piv.add(mesh(G.box, mat(0x50565f), 0, -0.5, 0, 0.34, 0.9, 0.34));
+    piv.add(mesh(G.box, mat(0x3a4048), 0, -1.08, 0.05, 0.55, 0.5, 0.55));     // 주먹
+    piv.userData.ph = s > 0 ? Math.PI : 0; arms.push(piv);
+  }
+  for (const s of [-1, 1]) g.add(mesh(G.cyl, mat(0x2c3036), s * 0.45, 2.75, -0.5, 0.12, 0.6, 0.12)); // 등의 배기관
+  g.userData.legs = [...legs, ...arms];
   return g;
 }
 function tankMesh() { // 드릴 코뿔소 탱크 (녹슨 주황)
@@ -41,35 +112,11 @@ function tankMesh() { // 드릴 코뿔소 탱크 (녹슨 주황)
   g.add(mesh(G.sph, glow(0xff3020), -0.45, 1.05, 1.0, 0.12, 0.12, 0.06));
   for (const s of [-1, 1]) g.add(mesh(G.box, mat(0x2c3036), s * 0.9, 0.35, 0, 0.35, 0.6, 2.1));
   for (let i = 0; i < 3; i++) g.add(mesh(G.cone, mat(0x9aa0a8), (i - 1) * 0.45, 1.6, -0.2, 0.15, 0.4, 0.15));
+  g.add(mesh(G.box, mat(0x50565f), 0, 1.75, 0.45, 0.7, 0.45, 0.5));          // 로봇 머리
+  g.add(mesh(G.box, glow(0xff3020), 0, 1.78, 0.71, 0.5, 0.1, 0.03));
   g.userData.drill = drill;
   return g;
 }
-function waspMesh() { // 말벌 로봇 (보라·노랑)
-  const g = new THREE.Group();
-  g.add(mesh(G.sph, mat(0x8a4dff), 0, 0, 0, 0.55, 0.5, 0.65));
-  g.add(mesh(G.sph, mat(0xffd23a), 0, -0.05, -0.75, 0.45, 0.42, 0.6));
-  const band = mesh(G.cyl, mat(0x2a1a44), 0, -0.05, -0.75, 0.47, 0.12, 0.47); band.rotation.x = Math.PI / 2; g.add(band);
-  const sting = mesh(G.cone, mat(0x222222), 0, -0.1, -1.4, 0.12, 0.4, 0.12); sting.rotation.x = -Math.PI / 2; g.add(sting);
-  g.add(mesh(G.sph, glow(0xff3020), 0.2, 0.1, 0.55, 0.12, 0.14, 0.08));
-  g.add(mesh(G.sph, glow(0xff3020), -0.2, 0.1, 0.55, 0.12, 0.14, 0.08));
-  const wings = [];
-  for (const s of [-1, 1]) { const w = mesh(G.sph, new THREE.MeshBasicMaterial({ color: 0xdff4ff, transparent: true, opacity: 0.55 }), s * 0.6, 0.45, -0.1, 0.6, 0.05, 0.3); g.add(w); wings.push(w); }
-  g.userData.wings = wings;
-  return g;
-}
-function hopperMesh() { // 개구리 로봇 (노란 협곡·호수)
-  const g = new THREE.Group();
-  g.add(mesh(G.sph, mat(0x7ac043), 0, 0.6, 0, 0.8, 0.6, 0.9));
-  g.add(mesh(G.sph, mat(0xf0e080), 0, 0.5, 0.35, 0.6, 0.4, 0.6));
-  g.add(mesh(G.box, mat(0x50565f), 0, 1.05, -0.1, 0.9, 0.2, 0.8));
-  for (const s of [-1, 1]) {
-    g.add(mesh(G.sph, mat(0x50565f), s * 0.42, 1.15, 0.45, 0.28, 0.28, 0.28));
-    g.add(mesh(G.sph, glow(0xffe14d), s * 0.42, 1.18, 0.66, 0.14, 0.14, 0.08));
-    g.add(mesh(G.box, mat(0x50565f), s * 0.75, 0.25, -0.2, 0.3, 0.3, 0.9));
-  }
-  return g;
-}
-
 function towerMesh() { // 로봇 기지 안테나 탑
   const g = new THREE.Group();
   g.add(mesh(G.cyl, mat(0x3a4048), 0, 0.6, 0, 3.2, 1.2, 3.2));
@@ -134,17 +181,19 @@ function gunnerMesh() {
   g.userData.head = head; g.userData.lamp = lamp;
   return g;
 }
-const CRITTER_OF = { beetle: 'bunny', crawler: 'bunny', tank: 'squirrel', wasp: 'bird', flyer: 'bird', hopper: 'frog', gunner: 'squirrel' };
+const CRITTER_OF = { beetle: 'bunny', crawler: 'bunny', tank: 'squirrel', wasp: 'bird', flyer: 'bird', hopper: 'frog', gunner: 'squirrel', brute: 'squirrel', titan: 'bird' };
 
 const TYPES = {
   tower: { make: towerMesh, hp: 5, radius: 2.0, speed: 0, color: 0xff5030, static: true, harmless: true, noRespawn: true, big: true },
   machine: { make: machineMesh, hp: 6, radius: 3.6, speed: 0, color: 0xffa030, static: true, harmless: true, noRespawn: true, big: true },
-  beetle: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545, size: 2.0 },
-  crawler: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545, size: 2.0 },
+  beetle: { make: soldierMesh, hp: 3, armor: 0, radius: 0.8, speed: 1, color: 0xd8402a, size: 1.6 },
+  crawler: { make: soldierMesh, hp: 3, armor: 0, radius: 0.8, speed: 1, color: 0xd8402a, size: 1.6 },
+  brute: { make: bruteMesh, hp: 9, armor: 1, radius: 1.1, speed: 0.7, color: 0x5a6478, size: 1.9 },
+  titan: { make: bruteMesh, hp: 14, armor: 1, radius: 1.1, speed: 0.6, color: 0x5a6478, size: 5.0, big: true }, // 하늘 도시 끝을 지키는 거인 로봇 (크지만 보통 몬스터만큼 약함)
   tank: { make: tankMesh, hp: 10, armor: 2, radius: 1.3, speed: 0.75, color: 0xc0652e, size: 1.7 },
-  wasp: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.8 },
-  flyer: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.8 },
-  hopper: { make: hopperMesh, hp: 5, armor: 1, radius: 1.0, speed: 0.9, color: 0x7ac043, hops: true, size: 1.9 },
+  wasp: { make: droneMesh, hp: 2, armor: 0, radius: 1.0, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.7 },
+  flyer: { make: droneMesh, hp: 2, armor: 0, radius: 1.0, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.7 },
+  hopper: { make: springMesh, hp: 5, armor: 1, radius: 0.9, speed: 0.9, color: 0x7ac043, hops: true, size: 1.8 },
   gunner: { make: gunnerMesh, hp: 6, armor: 1, radius: 1.5, speed: 0.45, color: 0x5a8a3a, size: 1.25, shoots: true },
 };
 
@@ -351,8 +400,8 @@ export class Enemies {
         e.mesh.position.copy(e.pos); e.mesh.rotation.y = e.yaw;
         e.hitFlash = Math.max(0, e.hitFlash - dt); e.mesh.scale.setScalar(1 + e.hitFlash * 0.4);
         const u = e.mesh.userData;
-        if (u.wings) for (const w of u.wings) w.rotation.z = Math.sin(time * 50) * 0.5;
-        if (u.legs) u.legs.forEach((l, i) => (l.rotation.x = Math.sin(time * 14 + i) * 0.4));
+        if (u.rotors) for (const r of u.rotors) r.rotation.y += dt * 40;
+        if (u.legs) u.legs.forEach((l, i) => (l.rotation.x = Math.sin(time * 9 + (l.userData.ph ?? i)) * 0.5));
         continue;
       }
       const H = this.game?.hard;
@@ -389,8 +438,8 @@ export class Enemies {
       e.hitFlash = Math.max(0, e.hitFlash - dt);
       e.mesh.scale.setScalar(1 + e.hitFlash * 0.4);
       const u = e.mesh.userData;
-      if (u.wings) for (const w of u.wings) w.rotation.z = Math.sin(time * 50) * 0.5;
-      if (u.legs) u.legs.forEach((l, i) => (l.rotation.x = Math.sin(time * 14 + i) * 0.4));
+      if (u.rotors) for (const r of u.rotors) r.rotation.y += dt * 40;
+      if (u.legs) u.legs.forEach((l, i) => (l.rotation.x = moving ? Math.sin(time * 9 + (l.userData.ph ?? i)) * 0.55 : l.rotation.x * 0.85));
       if (u.drill) u.drill.rotation.y += dt * 20;
     }
   }

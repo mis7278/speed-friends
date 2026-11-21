@@ -4,7 +4,7 @@ import { CFG } from './config.js';
 import { NAMES } from './names.js';
 import { Input } from './input.js';
 import { initSound as initAudio, SFX, SFX_INFO, BGM_INFO, playMusic, playVoice, stopVoice } from './audio.js';
-import { World, ZONES } from './world.js';
+import { World, ZONES, ICE_PEAK, SKY_HOLES } from './world.js';
 import { Graphics, createRenderer } from './graphics.js';
 import { Rings } from './rings.js';
 import { Enemies, Pickups } from './enemies.js';
@@ -32,9 +32,11 @@ window.addEventListener('error', (e) => showError('오류: ' + e.message + ' (' 
 window.addEventListener('unhandledrejection', (e) => showError('오류: ' + (e.reason && e.reason.message || e.reason)));
 
 // ---- 스테이지 정보 ----
-const STAGES = [
+const STAGES = [ // 6스테이지까지 예정 (5·6은 준비 중)
   { theme: 'forest', place: '숲', big: '녹슨 대공장' },
   { theme: 'ice', place: '얼음 나라', big: '얼어붙은 대공장' },
+  { theme: 'lava', place: '용암 섬', big: '불타는 대공장' },
+  { theme: 'sky', place: '하늘 도시', big: '구름 위 대공장' },
 ];
 const params = new URLSearchParams(location.search);
 const stageIdx = Math.min(STAGES.length - 1, Math.max(0, parseInt(params.get('stage') || '0', 10) || 0));
@@ -49,6 +51,9 @@ const TIPS = [
   '노란 별 장판을 밟으면 체크포인트가 저장돼요.',
   '금 간 벽은 파워형이나 슈퍼 상태일 때 부술 수 있어요.',
   '보스가 주저앉아 핵이 빛날 때 공격하세요!',
+  '얼음 나라에서는 슈퍼 상태로 땅을 내리치면 눈이 녹아요!',
+  '용암 섬: 용암에 빠지면 링의 30%를 잃고 체크포인트에서 다시 시작해요.',
+  '하늘 도시: 구멍 아래 구름을 세 번 연달아 밟으면 땅 위까지 높이 튀어 올라요!',
 ];
 document.getElementById('loading-stage').textContent = `STAGE ${stageIdx + 1}`;
 document.getElementById('loading-title').textContent = NAMES.stages[stageIdx];
@@ -158,6 +163,8 @@ function boot() {
     else if (m.t === 'wb') { const w = W.walls[m.i | 0]; if (w && !w.dead) pl.breakWall(w, true); }
     else if (m.t === 'ch') { const c = W.chests[m.i | 0]; if (c && !c.opened) { c.opened = true; const b = W.beacons.find((x) => x.name === c.name); if (b) b.found = true; game.hud.toast(`🎁 친구가 「${c.name}」 보물 상자를 열었어요!`); } }
     else if (m.t === 'bh') game.boss?.damage(+m.n || 1, null, true);
+    else if (m.t === 'sn') W.meltSnow(new THREE.Vector3(+m.x || 0, 0, +m.z || 0), Math.min(40, +m.r || 0)); // 친구가 녹인 눈
+    else if (m.t === 'ex') launchExit(true);                                                               // 친구가 대포·분출구를 탐 → 다 같이
     else if (m.t === 'ep' && !net.host && Array.isArray(m.a)) {
       for (let k = 0; k + 4 < m.a.length; k += 5) {
         const e = E.list[m.a[k] | 0]; if (!e || e.T.static) continue;
@@ -232,48 +239,81 @@ function boot() {
   const rust = V(ZONES.rust.x, W.groundAt(ZONES.rust.x, ZONES.rust.z), ZONES.rust.z);
 
   // ---- 이야기 대사 (docs/스토리.md 기준) ----
-  const TREE = NAMES.heartTree, CRY = NAMES.bigCrystal, EMP = NAMES.empire;
+  // 대지의 크리스탈은 각 대지 한가운데 땅속 깊이 잠들어 있음 → 기어 군단이 굴착기로 파내서 관을 꽂아 힘을 뽑아 감
+  const CRY = BIG_CRYSTALS[stageIdx].name, EMP = NAMES.empire;
   const nm = (k) => NAMES.characters[k];
   const friendKind = () => RADIO_FRIEND[pl.kind];
   const radio = () => `${nm(friendKind())} (무전):`;
   const me = () => `${nm(pl.kind)}:`;
-  const STORY = stageIdx === 0 ? {
-    intro: [
-      `${NAMES.island} 숲 한가운데. ${TREE} 속 숲의 크리스탈이 숲에 풍요를 가져다주고 있었어요.`,
-      `그런데 어느 날, ${VIL}의 로봇 군단이 숲을 빙 둘러쌌어요!`,
-      `로봇들은 ${TREE}에 관을 꽂아 크리스탈의 힘을 빨아들이기 시작했어요.`,
-      '숲의 동물 친구들은 붙잡혀서 로봇 안에 갇혀 버렸어요...',
-      `와하하! 크리스탈의 힘은 이제 이 천재 ${VIL}님 거다! 이 숲은 위대한 ${EMP}의 첫 번째 땅이 될 것이다!`,
-      '숲 한가운데에 로봇 군단에 명령을 보내는 로봇 기지가 생겼어요.',
-      '로봇을 부수면 안에 갇힌 동물 친구들이 풀려나! 먼저 기지의 안테나 탑을 부수자!',
-    ],
-    q2: ['으앗, 안테나 탑이! 괘, 괜찮아! 공장에서 로봇은 얼마든지 다시 만들 수 있다고!', '저 공장에서 동물 친구들을 잡아다 로봇 안에 가두고 있어요!', '공장 안으로 들어가서 친구들을 다 구하고, 생산 기계를 멈추자!'],
-    q3: ['렌치! 이 멍청이! 작은 공장 하나 지키지도 못하다니! 녹슨 대공장을 전부 가동해라!', '히익! 네, 넵! 기어님!', `대공장의 파이프가 ${TREE}까지 이어져 있어요. 크리스탈의 힘으로 더 강한 로봇을 만들고 있어요!`, '대공장을 멈추면 나무가 숨을 쉴 수 있어! 쳐들어가자!'],
-    flee: ['으악! 내 대공장이...! 기어님께 혼나겠어~!', `${SCI}가 보라 늪 쪽으로 허둥지둥 도망쳐요!`],
-    q4: '보라 늪 한가운데의 과학 연구소. 빼앗은 크리스탈의 힘이 저기 모이고 있어요.',
-    boss: ['여기까지 쫓아오다니! 하지만 크리스탈의 힘을 가득 채운 내 최고 걸작을 보면 깜짝 놀랄걸?', '하늘에서 거대한 로봇이 내려왔어요!', `${NAMES.finalBoss}, 출동! 기어님께 칭찬받을 테다!`, '보스는 숲 어디든 쫓아와요! 충격파는 점프로 피하고, 주저앉아 핵이 빛날 때 공격!'],
-    end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 크리스탈의 힘이 ${TREE}로 돌아가요!`, `관이 모두 끊어지고 ${TREE}가 다시 환하게 빛나요. 숲에 풍요가 돌아왔어요!`, '으아앙! 기어님께 이를 거야~!', '숲을 둘러싼 기계들도 무너져 내려요!', '크윽...! 숲 하나쯤 줘 버리지! 얼음 나라의 크리스탈은 이미 내 손 안에 있다! 와하하!', '얼음 나라가 위험해! 숲 밖으로 나가서 얼음 나라로 가자!'],
-  } : {
-    intro: [
-      '얼음 나라. 얼음의 크리스탈 덕분에 맑고 반짝이는 눈이 내리던 곳이에요.',
-      `하지만 ${VIL}의 로봇 군단이 이곳도 둘러쌌어요!`,
-      '빼앗긴 얼음의 크리스탈로 거대한 제설 기계가 돌아가고 있어요.',
-      '얼음 나라의 동물 친구들도 로봇 안에 갇혀 버렸어요...',
-      `와하하! 기계 눈으로 덮인 얼음 나라! ${EMP}에 딱 어울리는구나!`,
-      '먼저 로봇 기지부터!',
-      '여긴 정말 춥다... 그래도 힘내자! 기지의 안테나 탑부터 부수자!',
-    ],
+  const COMMON = { // 2스테이지부터 퀘스트 2~5 공통 대사 (장소 이름만 바뀜)
     q2: ['또 왔냐?! 공장은 또 만들면 그만이라고!', '저 공장에 동물 친구들이 갇혀 있어요!', '공장 안 친구들을 구하고 생산 기계를 멈추자!'],
-    q3: ['렌치! 얼어붙은 대공장을 가동해라!', '네, 넵!', '대공장이 크리스탈의 힘을 빨아들이고 있어요!', '쳐들어가자!'],
-    flee: ['으악! 또야?!', `${SCI}가 또 도망쳐요!`],
+    q3: [`렌치! ${STAGE.big}을 가동해라!`, '네, 넵! 기어님!', `${STAGE.big}이 빼앗은 크리스탈의 힘으로 더 강한 로봇을 만들고 있어요!`, '쳐들어가자!'],
+    flee: ['으악! 또야?! 기어님께 혼나겠어~!', `${SCI}가 또 도망쳐요!`],
     q4: `${SCI}가 연구소로 숨었어요.`,
-    boss: ['이번엔 다를걸?', '거대한 로봇이 내려왔어요!', '출동!', '충격파는 점프로 피하고, 핵이 빛날 때 공격!'],
-    end: ['로봇이 쓰러지자 크리스탈의 힘이 돌아가요!', '얼어붙었던 나무가 다시 빛나요!', '으아앙~!', '포위하던 기계들이 무너져요!', '흥! 화산에서 기다리고 있으마! 와하하!', '다음 이야기는 아직 만드는 중이에요. 자유롭게 달려보세요!'],
+    boss: ['이번엔 다를걸? 크리스탈의 힘을 가득 채웠다고!', '하늘에서 거대한 로봇이 내려왔어요!', `${NAMES.finalBoss}, 출동!`, '충격파는 점프로 피하고, 주저앉아 핵이 빛날 때 공격!'],
   };
+  const STORY = [
+    { // 1. 숲
+      intro: [
+        `${NAMES.island} 숲 한가운데, 땅속 깊은 곳에는 숲에 풍요를 주는 ${CRY}이(가) 잠들어 있었어요.`,
+        `그런데 어느 날, ${VIL}의 로봇 군단이 숲을 빙 둘러쌌어요!`,
+        '거대한 굴착기가 숲 한가운데 땅을 파헤치기 시작했어요! 쿠르르릉...!',
+        `땅속에서 ${CRY}이(가) 드러나자, 로봇들이 관을 꽂아 크리스탈의 힘을 쭉쭉 뽑아 가요!`,
+        '숲의 동물 친구들은 붙잡혀서 로봇 안에 갇혀 버렸어요...',
+        `와하하! 크리스탈의 힘은 이제 이 천재 ${VIL}님 거다! 이 숲은 위대한 ${EMP}의 첫 번째 땅이 될 것이다!`,
+        '숲 한가운데에 로봇 군단에 명령을 보내는 로봇 기지가 생겼어요.',
+        '로봇을 부수면 안에 갇힌 동물 친구들이 풀려나! 먼저 기지의 안테나 탑을 부수자!',
+      ],
+      q2: ['으앗, 안테나 탑이! 괘, 괜찮아! 공장에서 로봇은 얼마든지 다시 만들 수 있다고!', '저 공장에서 동물 친구들을 잡아다 로봇 안에 가두고 있어요!', '공장 안으로 들어가서 친구들을 다 구하고, 생산 기계를 멈추자!'],
+      q3: ['렌치! 이 멍청이! 작은 공장 하나 지키지도 못하다니! 녹슨 대공장을 전부 가동해라!', '히익! 네, 넵! 기어님!', '대공장의 파이프가 크리스탈 구덩이까지 이어져 있어요. 빼앗은 크리스탈의 힘으로 더 강한 로봇을 만들고 있어요!', '대공장을 멈추면 크리스탈의 힘이 덜 빠져나가! 쳐들어가자!'],
+      flee: ['으악! 내 대공장이...! 기어님께 혼나겠어~!', `${SCI}가 보라 늪 쪽으로 허둥지둥 도망쳐요!`],
+      q4: '보라 늪 한가운데의 과학 연구소. 빼앗은 크리스탈의 힘이 저기 모이고 있어요.',
+      boss: ['여기까지 쫓아오다니! 하지만 크리스탈의 힘을 가득 채운 내 최고 걸작을 보면 깜짝 놀랄걸?', '하늘에서 거대한 로봇이 내려왔어요!', `${NAMES.finalBoss}, 출동! 기어님께 칭찬받을 테다!`, '보스는 숲 어디든 쫓아와요! 충격파는 점프로 피하고, 주저앉아 핵이 빛날 때 공격!'],
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 크리스탈의 힘이 ${CRY}(으)로 돌아가요!`, `관이 모두 끊어지고 ${CRY}이(가) 다시 환하게 빛나요. 숲에 풍요가 돌아왔어요!`, '으아앙! 기어님께 이를 거야~!', '숲을 둘러싼 기계들도 무너져 내려요!', '크윽...! 숲 하나쯤 줘 버리지! 얼음 나라의 크리스탈은 이미 내 손 안에 있다! 와하하!', '얼음 나라가 위험해! 북쪽 눈길을 따라 얼음 나라로 가자!'],
+    },
+    { // 2. 얼음 나라: 장벽보다 높은 얼음산 꼭대기에서 뛰어내리며 시작
+      intro: [
+        '북쪽 눈길 끝까지 달려왔더니... 구름까지 닿는 거대한 얼음산 꼭대기예요!',
+        '아래를 내려다보니, 높은 장벽에 빙 둘러싸인 얼음 나라가 보여요!',
+        `얼음 나라 한가운데에서도 굴착기가 땅을 파헤쳐 ${CRY}을(를) 꺼내고 있어요!`,
+        `와하하! 여기까지 왔구나! 하지만 장벽 밖으로 나가면 내 기어 군단이 가만두지 않을 거다!`,
+        '좋아, 여기서 아래로 뛰어내려서 바로 쳐들어가자!',
+        '조심해! 얼음산은 장벽보다 높아서 엉뚱한 쪽으로 뛰면 장벽 밖으로 떨어질 수 있어!',
+      ],
+      ...COMMON,
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, '눈 덮인 얼음 나라가 다시 반짝반짝 빛나요!', '으아앙~! 또 졌어!', '얼음 나라를 둘러싼 기계들이 무너져요!', '흥! 다음은 용암 섬이다! 끝없는 용암 바다 한가운데라서 아무도 못 올걸? 와하하!', '대지 한가운데의 거대 대포에 들어가면 용암 섬까지 날아갈 수 있어! 가자!'],
+    },
+    { // 3. 용암 섬: 대포를 타고 날아와 떨어지며 시작 (벽 없음, 용암에 빠지면 링 30% 잃음)
+      intro: [
+        '거대 대포에서 슝~! 하늘을 가로질러 날아간 곳은...',
+        '끝없는 용암 바다 한가운데에 떠 있는 용암 섬! 이곳엔 벽이 없는 대신, 섬 밖은 온통 용암이에요.',
+        `섬 한가운데에서도 굴착기가 ${CRY}을(를) 파내 힘을 뽑아 가고 있어요!`,
+        '와하하! 뜨거운 맛 좀 봐라! 용암에 빠지면 링을 잃고 처음부터다!',
+        '앗 뜨거! 용암은 조심조심 피해서 달리자!',
+        '먼저 로봇 기지의 안테나 탑부터 부수자!',
+      ],
+      ...COMMON,
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, `${CRY}이(가) 다시 따뜻하게 빛나요. 섬에 생명이 돌아왔어요!`, '으아앙~! 뜨거워!', '섬을 덮던 검은 연기가 걷혀요!', '크으윽! 하지만 하늘 도시는 절대 못 올 거다! 구름 위에 있으니까! 와하하!', '섬 한가운데의 용암 분출구를 타면 하늘까지 솟구칠 수 있어! 가자!'],
+    },
+    { // 4. 하늘 도시: 분출구를 타고 구름을 뚫고 솟아오르며 시작 (구멍 아래 구름은 푹신, 끝 너머는 낭떠러지)
+      intro: [
+        '용암 분출구를 타고 구름을 뚫고 솟아오르자... 하늘 위에 떠 있는 기계 도시가 나타났어요!',
+        '땅 곳곳에 구멍이 뚫려 있어요. 떨어져도 푹신한 구름이 튕겨 줘요. 세 번 연달아 밟으면 땅 위까지 높이 튀어 올라요!',
+        '하지만 도시 끝 너머로 나가면 끝없이 떨어져 버려요! 끝은 거인 로봇들이 지키고 있어요.',
+        `도시 한가운데에서도 굴착기가 ${CRY}을(를) 파내고 있어요!`,
+        `와하하! 여기까지 오다니! 하지만 이 하늘 도시는 ${EMP}의 수도다!`,
+        '높은 곳이라고 겁먹을 줄 알고? 가자!',
+        '먼저 로봇 기지의 안테나 탑부터 부수자!',
+      ],
+      ...COMMON,
+      end: [`${NAMES.finalBoss}가 쓰러지자, 빼앗겼던 힘이 ${CRY}(으)로 돌아가요!`, `${CRY}이(가) 다시 황금빛으로 빛나요!`, '으아앙~! 기어님~!', '하늘 도시의 빨간 경고등이 모두 꺼져요!', '크윽...! 아직 끝나지 않았다! 다음 대지에서 보자! 와하하!', '다음 이야기는 아직 만드는 중이에요. 자유롭게 하늘 도시를 달려 보세요!'],
+    },
+  ][stageIdx];
 
   // ---- 목소리 파일 이름표 (sounds/voice/아이디.mp3) ----
-  const WHO = { intro: ['narr', 'narr', 'narr', 'narr', 'gear', 'narr', stageIdx === 0 ? 'friend' : 'player'], q2: ['wrench', 'narr', 'friend'], q3: ['gear', 'wrench', 'narr', 'friend'],
-    flee: ['wrench', 'narr'], q4: ['narr'], boss: ['wrench', 'narr', 'wrench', 'narr'], end: ['narr', 'narr', 'wrench', 'narr', 'gear', stageIdx === 0 ? 'friend' : 'narr'] };
+  const WHO = { intro: [['narr', 'narr', 'narr', 'narr', 'narr', 'gear', 'narr', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'gear', 'player', 'friend'], ['narr', 'narr', 'narr', 'narr', 'gear', 'player', 'friend']][stageIdx],
+    q2: ['wrench', 'narr', 'friend'], q3: ['gear', 'wrench', 'narr', 'friend'],
+    flee: ['wrench', 'narr'], q4: ['narr'], boss: ['wrench', 'narr', 'wrench', 'narr'], end: ['narr', 'narr', 'wrench', 'narr', 'gear', stageIdx === 3 ? 'narr' : 'friend'] };
   const VOICE = new Map(), voiceList = [];
   const regVoice = (id, who, text) => { if (!VOICE.has(text)) { VOICE.set(text, { id, who }); voiceList.push({ id, who, text }); } };
   for (const [k, arr] of Object.entries(STORY)) (Array.isArray(arr) ? arr : [arr]).forEach((t, i) => regVoice(`s${stageIdx + 1}_${k}_${i + 1}`, (WHO[k] || [])[i] || 'narr', t));
@@ -300,11 +340,20 @@ function boot() {
       enter: () => { holo.show(hp, 9, V(0, 0, 0)); extra.enter?.(); } };
   };
   const hideHolo = (s) => ({ ...s, enter: () => { holo.hide(); s.enter?.(); } });
-  const tree = Tq.heartTree;
+  const tree = Tq.crystal; // 크리스탈 구덩이
   const treeShot = (text, who, extra = {}) => ({
-    from: { pos: tree.clone().add(V(-38, 14, 30)), look: tree.clone().add(V(0, 18, 0)) },
-    to: { pos: tree.clone().add(V(-20, 8, 36)), look: tree.clone().add(V(0, 14, 0)) }, dur: 4.5, text, who, ...extra });
+    from: { pos: tree.clone().add(V(-34, 18, 30)), look: tree.clone().add(V(0, 5, 0)) },
+    to: { pos: tree.clone().add(V(-20, 11, 30)), look: tree.clone().add(V(0, 4, 0)) }, dur: 4.5, text, who, ...extra });
+  // 굴착기가 땅을 파는 장면 (흙이 튀고 땅이 흔들림)
+  const digShot = (text) => ({
+    from: { pos: tree.clone().add(V(-70, 40, 58)), look: tree.clone().add(V(0, 8, 0)) }, to: { pos: tree.clone().add(V(-52, 30, 50)), look: tree.clone().add(V(0, 5, 0)) }, dur: 4.5, text,
+    enter: () => { W.crystalState(1); SFX.explosion(); },
+    tick: (dt, t) => { if (Math.random() < 0.5) game.fx.burst(tree.clone().add(V((Math.random() - 0.5) * 8, 3.5, (Math.random() - 0.5) * 8)), Math.random() < 0.5 ? STAGE_DIRT : 0x5a4a3a, 4, 9); camera.position.x += (Math.random() - 0.5) * 0.3; },
+  });
+  const crystalOut = (text) => ({ ...treeShot(text), enter: () => { W.crystalState(2); SFX.crystal(); for (let i = 0; i < 3; i++) setTimeout(() => game.fx.burst(tree.clone().add(V(0, 6 + i * 3, 0)), BIG_CRYSTAL_HEX, 18, 10), i * 250); } });
 
+  const STAGE_DIRT = W.T.dirt, BIG_CRYSTAL_HEX = parseInt(BIG_CRYSTALS[stageIdx].color.slice(1), 16);
+  const peak = V(ICE_PEAK.x, W.spawn.pos.y, ICE_PEAK.z);
   // ---- 퀘스트 (스토리 순서) ----
   const kills = {};
   game.onEnemyDeath = (e) => { if (e.tag && !e.T.static) kills[e.tag] = (kills[e.tag] || 0) + 1; };
@@ -380,9 +429,9 @@ function boot() {
           treeShot(S.end[1], null, { enter: () => { W.restoreTree(); SFX.crystal(); for (let i = 0; i < 4; i++) setTimeout(() => { game.fx.burst(tree.clone().add(V(0, 14 + i * 6, 0)), 0x9dff9a, 24, 12); game.fx.shockwave(tree.clone().add(V(0, 1, 0)), 14 + i * 6, 0x9dff9a); }, i * 350); } }),
           { from: () => ({ pos: sci.pos.clone().add(V(-10, 4, -10)), look: sci.pos.clone() }), dur: 3, who: `${SCI}:`, text: S.end[2],
             enter: () => { sci.show(bp.clone().add(V(0, 3, 0))); sci.flyTo(bp.clone().add(V(Math.sin(ang + Math.PI) * 300, 60, Math.cos(ang + Math.PI) * 300)), 4); } },
-          { ...barrierShot(ang, S.end[3]), enter: () => { sci.hide(); W.removeBarrier(); } },
+          { ...barrierShot(ang, S.end[3]), enter: () => { sci.hide(); W.removeBarrier(); W.exitGlow?.material.color.set(0x3dff6a); } },
           gearShot(ang + 0.6, S.end[4]),
-          hideHolo(playerShot(S.end[5], stageIdx === 0 ? radio() : null)),
+          hideHolo(playerShot(S.end[5], stageIdx < 3 ? radio() : null)),
         ];
       },
       outroEnd: () => {
@@ -390,12 +439,16 @@ function boot() {
         const r = recoverCrystal(stageIdx, game.hard);
         const C = BIG_CRYSTALS[stageIdx];
         SFX.crystal();
-        game.hud.toast(`${C.emoji} ${C.name}을(를) 되찾았다! (${r.count}/5)`, 'gold');
-        if (r.newlyUnlockedHard) setTimeout(() => game.hud.toast('⭐ 다섯 크리스탈을 모두 되찾았다! 시작 화면에서 "도전 모드"를 할 수 있어요!', 'gold'), 2600);
+        game.hud.toast(`${C.emoji} ${C.name}을(를) 되찾았다! (${r.count}/${BIG_CRYSTALS.length})`, 'gold');
+        if (r.newlyUnlockedHard) setTimeout(() => game.hud.toast('⭐ 모든 크리스탈을 되찾았다! 시작 화면에서 "도전 모드"를 할 수 있어요!', 'gold'), 2600);
         showStageInfo();
       } },
-    { title: '🎉 스테이지 클리어!', target: () => (stageIdx + 1 >= STAGES.length ? null : pl.pos.z < W.exitGate.z ? W.exitGate : V(0, 0, CFG.world.exitR + 40)),
-      text: () => stageIdx + 1 < STAGES.length ? `북쪽 눈길을 따라 끝까지 달려가면 ${NAMES.stages[stageIdx + 1]}(으)로! ❄️` : '다음 이야기는 아직 만드는 중이에요! 자유롭게 달려보세요',
+    { title: '🎉 스테이지 클리어!',
+      target: () => (stageIdx + 1 >= STAGES.length ? null : W.exitDevice ? W.exitDevice.pos : pl.pos.z < W.exitGate.z ? W.exitGate : V(0, 0, CFG.world.exitR + 40)),
+      text: () => stageIdx + 1 >= STAGES.length ? '다음 이야기는 아직 만드는 중이에요! 자유롭게 달려보세요'
+        : W.exitDevice?.kind === 'cannon' ? `대지 한가운데의 거대 대포 속으로! ${NAMES.stages[stageIdx + 1]}까지 슝~ 🚀`
+        : W.exitDevice?.kind === 'geyser' ? `섬 한가운데의 용암 분출구 위로! ${NAMES.stages[stageIdx + 1]}까지 솟구쳐요 🌋`
+        : `북쪽 눈길을 따라 끝까지 달려가면 ${NAMES.stages[stageIdx + 1]}(으)로! ❄️`,
       done: () => false },
   ];
   function bossDefeated() { game.musicHold = 9; SFX.quest(); game.hud.setBoss(null); for (const p of game.players) p.shake = 1.2; }
@@ -440,16 +493,111 @@ function boot() {
   }
 
   // 처음 이야기 (고른 캐릭터에 맞춰 시작할 때 만듦)
-  const buildIntro = () => [
-    { from: { pos: tree.clone().add(V(-90, 60, 110)), look: tree.clone().add(V(0, 20, 0)) }, to: { pos: tree.clone().add(V(-40, 30, 70)), look: tree.clone().add(V(0, 22, 0)) }, dur: 5, text: S.intro[0] },
-    barrierShot(0.15, S.intro[1]),
-    treeShot(S.intro[2]),
-    orbit(rust, 160, 60, 0.6, 1.3, 4.5, S.intro[3]),
-    gearShot(0.4, S.intro[4]),
-    hideHolo(orbit(Tq.base, 60, 28, 3.6, 2.6, 4, S.intro[5])),
-    playerShot(stageIdx === 0 ? LINES[pl.kind].start : S.intro[6], me()),
-    { ...playerShot(stageIdx === 0 ? S.intro[6] : '', radio()), dur: 3.5 },
-  ];
+  // 캐릭터가 하늘에서 날아오거나 아래에서 솟구치는 장면용
+  const flyShot = (text, who, startPos, vel, grav, cam, dur = 4) => ({
+    from: () => ({ pos: pl.pos.clone().add(cam), look: pl.pos.clone() }), dur, text, who, hold: 0.6,
+    enter: () => { pl.pos.copy(startPos); pl._cv = vel.clone(); pl.view.root.visible = true; },
+    tick: (dt) => { if (!pl._cv) return; pl._cv.y -= grav * dt; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); if (Math.random() < 0.7) game.fx.burst(pl.pos.clone(), stageIdx === 2 ? 0xffa030 : 0xffffff, 2, 3); },
+  });
+  const buildIntro = () => {
+    const I = S.intro, crystalPit = tree;
+    if (stageIdx === 0) return [
+      { from: { pos: crystalPit.clone().add(V(-90, 60, 110)), look: crystalPit.clone().add(V(0, 4, 0)) }, to: { pos: crystalPit.clone().add(V(-40, 30, 70)), look: crystalPit.clone().add(V(0, 2, 0)) }, dur: 5, text: I[0], enter: () => W.crystalState(0) },
+      barrierShot(0.15, I[1]),
+      digShot(I[2]),
+      crystalOut(I[3]),
+      orbit(rust, 160, 60, 0.6, 1.3, 4.5, I[4]),
+      gearShot(0.4, I[5]),
+      hideHolo(orbit(Tq.base, 60, 28, 3.6, 2.6, 4, I[6])),
+      playerShot(LINES[pl.kind].start, me()),
+      { ...playerShot(I[7], radio()), dur: 3.5 },
+    ];
+    if (stageIdx === 1) return [ // 얼음산 꼭대기 → 아래로 장벽에 둘러싸인 얼음 나라
+      { from: { pos: peak.clone().add(V(60, 30, 70)), look: peak.clone().add(V(0, 2, 0)) }, to: { pos: peak.clone().add(V(20, 8, 26)), look: peak.clone() }, dur: 4.5, text: I[0] },
+      { from: { pos: peak.clone().add(V(0, 6, -10)), look: V(0, 0, 400) }, to: { pos: peak.clone().add(V(0, 12, -30)), look: V(0, 0, -300) }, dur: 5, text: I[1] },
+      digShot(I[2]), crystalOut(''),
+      gearShot(Math.PI - 0.3, I[3]),
+      hideHolo(playerShot(I[4], me())),
+      { ...playerShot(I[5], radio()), dur: 3.5 },
+    ];
+    if (stageIdx === 2) return [ // 대포에서 날아와 섬에 떨어짐
+      flyShot(I[0], null, V(-400, 260, 900), V(70, 10, -150), 18, V(-10, 6, 22), 4),
+      { from: { pos: V(0, 420, 2000), look: V(0, 0, 0) }, to: { pos: V(0, 260, 1500), look: V(0, 0, 200) }, dur: 5, text: I[1], enter: () => { pl.view.root.visible = false; } },
+      digShot(I[2]), crystalOut(''),
+      gearShot(0.4, I[3]),
+      hideHolo(flyShot(I[4], me(), V(0, 120, 90), V(0, -6, -14), 30, V(6, 3, 12), 3)),
+      { ...playerShot(I[5], radio()), dur: 3.5 },
+    ];
+    const H = SKY_HOLES[0] || { x: 300, z: 300, r: 20 }, hp = V(H.x, 0, H.z), E = CFG.sky.edge;
+    return [ // 4. 구름을 뚫고 솟아올라 하늘 도시에 도착
+      flyShot(I[0], null, V(0, -70, 60), V(0, 75, -4), 30, V(14, -4, 18), 4.5),
+      { from: { pos: hp.clone().add(V(H.r + 14, 30, 10)), look: hp.clone().add(V(0, -40, 0)) }, to: { pos: hp.clone().add(V(H.r + 6, 18, 4)), look: hp.clone().add(V(0, -40, 0)) }, dur: 5, text: I[1], enter: () => { pl.view.root.visible = false; } },
+      { from: { pos: V(30, 40, E - 160), look: V(0, -30, E + 300) }, to: { pos: V(-30, 26, E - 90), look: V(0, -45, E + 300) }, dur: 5, text: I[2] },
+      digShot(I[3]), crystalOut(''),
+      gearShot(0.4, I[4]),
+      hideHolo(playerShot(I[5], me())),
+      { ...playerShot(I[6], radio()), dur: 3.5 },
+    ];
+  };
+  // 이야기가 끝난 뒤 시작 자세: 대포로 날아온 3스테이지는 하늘에서 떨어지고, 4스테이지는 구름 아래에서 솟구쳐 착지
+  function afterIntro() {
+    pl._cv = null; pl.view.root.visible = true;
+    W.crystalState(2);
+    if (stageIdx === 2) { pl.pos.set(0, 70, 40); pl.state = 'air'; pl.vel.set(0, -8, -8); }
+    else if (stageIdx === 3) { pl.pos.set(0, 26, 28); pl.state = 'air'; pl.vel.set(0, 16, -4); }
+    else if (stageIdx === 1) game.hud.toast('⬇️ 얼음산 아래로 뛰어내려 얼음 나라로! (장벽 밖으로 떨어지면 기어 군단이 나타나요)', 'gold');
+  }
+
+  // ---- 다음 대지로 가는 장치 (얼음 나라 = 거대 대포, 용암 섬 = 용암 분출구): 한 명이 타면 다 같이 ----
+  let exitWarnT = 0, exiting = false;
+  function launchExit(fromFriend = false) {
+    const X = W.exitDevice; if (!X || exiting || leaving) return;
+    exiting = true;
+    if (!fromFriend && net.shared) net.sendGame({ t: 'ex' });
+    const c = X.pos.clone(), up = V(0, 1, 0), dir = X.kind === 'cannon' ? V(Math.sin(X.yaw) * Math.cos(0.75), Math.sin(0.75), Math.cos(X.yaw) * Math.cos(0.75)) : up;
+    const mouth = X.kind === 'cannon' ? c.clone().add(V(0, 7.5, 0)).addScaledVector(dir, 22) : c.clone().add(V(0, 8, 0));
+    const side = V(Math.cos(X.yaw), 0, -Math.sin(X.yaw));
+    const friend = fromFriend ? '친구가' : `${nm(pl.kind)}이(가)`;
+    const shots = X.kind === 'cannon' ? [
+      { from: { pos: c.clone().addScaledVector(side, 34).add(V(0, 14, 0)), look: c.clone().add(V(0, 8, 0)) }, to: { pos: c.clone().addScaledVector(side, 28).add(V(0, 12, 0)), look: c.clone().add(V(0, 9, 0)) }, dur: 2.6, hold: 0.4,
+        text: `${friend} 거대 대포 속으로 쏙! 모두 함께 출발!`, enter: () => { pl.view.root.visible = false; SFX.store(); } },
+      { from: { pos: c.clone().addScaledVector(side, 40).add(V(0, 10, 0)), look: mouth }, dur: 1.8, hold: 0.2, text: '3, 2, 1... 발사!!!',
+        enter: () => { game.fx.explosion(mouth, 3); game.fx.shockwave(mouth, 14, 0xffd040); game.fx.burst(mouth, 0xffffff, 30, 20); SFX.explosion(); game.hud.flash('rgba(255,220,140,0.6)'); pl.pos.copy(mouth); pl._cv = dir.clone().multiplyScalar(90); pl.view.root.visible = true; },
+        tick: (dt) => { if (!pl._cv) return; pl._cv.y -= 12 * dt; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); game.fx.burst(pl.pos.clone(), 0xffa030, 2, 3); } },
+      { from: () => ({ pos: pl.pos.clone().addScaledVector(dir, -30).add(V(0, 8, 0)), look: pl.pos.clone() }), dur: 2.6, hold: 0.3, text: `${NAMES.stages[stageIdx + 1]}까지 날아가요~!`,
+        tick: (dt) => { if (!pl._cv) return; pl._cv.y -= 12 * dt; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); game.fx.burst(pl.pos.clone(), 0xffa030, 2, 3); } },
+    ] : [
+      { from: { pos: c.clone().add(V(30, 12, 30)), look: c.clone().add(V(0, 7, 0)) }, to: { pos: c.clone().add(V(24, 10, 24)), look: c.clone().add(V(0, 8, 0)) }, dur: 2.6, hold: 0.4,
+        text: `${friend} 용암 분출구 위에 올라섰어요! 부글부글...`, enter: () => { pl.pos.copy(mouth); pl.vel.set(0, 0, 0); pl.updateView(0); } },
+      { from: { pos: c.clone().add(V(36, 6, 36)), look: c.clone().add(V(0, 30, 0)) }, dur: 1.8, hold: 0.2, text: '콰아아앙!!!',
+        enter: () => { game.fx.explosion(mouth, 3.5); game.fx.shockwave(mouth, 16, 0xff6a20); game.fx.burst(mouth, 0xff6a20, 40, 26); SFX.explosion(); game.hud.flash('rgba(255,140,60,0.6)'); pl._cv = V(0, 95, 0); },
+        tick: (dt) => { if (!pl._cv) return; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); game.fx.burst(pl.pos.clone().add(V(0, -1, 0)), Math.random() < 0.5 ? 0xff6a20 : 0xffd040, 3, 5); } },
+      { from: () => ({ pos: pl.pos.clone().add(V(20, -30, 20)), look: pl.pos.clone() }), dur: 2.6, hold: 0.3, text: `구름을 뚫고 ${NAMES.stages[stageIdx + 1]}까지!`,
+        tick: (dt) => { if (!pl._cv) return; pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); game.fx.burst(pl.pos.clone().add(V(0, -1, 0)), 0xff6a20, 2, 5); } },
+    ];
+    playCine(shots, () => {
+      pl._cv = null;
+      if (net.shared) { if (net.host) net.startAll(stageIdx + 1); else { game.hud.toast('방장과 함께 다음 대지로 가는 중...'); setTimeout(() => { if (!leaving) net.sendGame({ t: 'go', stage: stageIdx + 1 }); }, 1500); } }
+      else goNextStage();
+    });
+  }
+  function exitTick(dt) {
+    const X = W.exitDevice; if (!X || !pl.alive || exiting) return;
+    exitWarnT = Math.max(0, exitWarnT - dt);
+    if (Math.hypot(pl.pos.x - X.pos.x, pl.pos.z - X.pos.z) > X.r || pl.pos.y > X.top + 6) return;
+    if (q.i === quests.length - 1) launchExit();
+    else if (exitWarnT <= 0) { exitWarnT = 4; game.hud.toast(X.kind === 'cannon' ? '🚀 거대 대포는 보스를 물리친 뒤에 탈 수 있어요!' : '🌋 용암 분출구는 보스를 물리친 뒤에 탈 수 있어요!'); }
+  }
+  // 얼음 나라: 슈퍼 공격으로 녹인 눈 (같이 하기 중이면 친구 화면에서도 녹음)
+  game.melt = (p, r) => { if (W.meltSnow(p, r) && net.shared) net.sendGame({ t: 'sn', x: +p.x.toFixed(1), z: +p.z.toFixed(1), r: +r.toFixed(1) }); };
+  // 하늘 도시 끝 너머로 떨어짐: "아아악!!!" 장면 뒤 체크포인트에서 다시 시작 (링 30% 잃음)
+  game.onVoidFall = (keep, lost) => {
+    pl._cv = pl.vel.clone(); pl._cv.y = Math.min(pl._cv.y, -10); pl._cv.x *= 0.4; pl._cv.z *= 0.4;
+    playCine([{ from: () => ({ pos: pl.pos.clone().add(V(4, 16, 4)), look: pl.pos.clone() }), dur: 2.4, hold: 0.3, who: me(), text: '아아아아악!!!!',
+      enter: () => SFX.hurt(),
+      tick: (dt) => { pl._cv.y = Math.max(-45, pl._cv.y - 40 * dt); pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); if (Math.random() < 0.4) game.fx.burst(pl.pos.clone().add(V(0, 2, 0)), 0xffffff, 2, 2); } }],
+    () => { pl._cv = null; pl.die(keep); if (lost) game.hud.toast(`☁️ 구름 아래로 떨어졌어요... (링 -${lost})`); });
+  };
 
   const bigStar = new THREE.Mesh(new THREE.OctahedronGeometry(1.2, 0), new THREE.MeshBasicMaterial({ color: 0xffe14d, toneMapped: false }));
   bigStar.position.copy(Tq.bigStar);
@@ -485,7 +633,7 @@ function boot() {
   }
   // 되찾은 대지의 크리스탈 표시
   const prog0 = loadProgress();
-  game.allClear = prog0.crystals.every(Boolean); // 5개 대지를 모두 되찾으면 링 없이 슈퍼 변신 (5분, 쿨타임 1분)
+  game.allClear = prog0.crystals.every(Boolean); // 모든 대지를 되찾으면 링 없이 슈퍼 변신 (5분, 쿨타임 1분)
   const showStageInfo = () => { const pr = loadProgress(); game.hud.setStageInfo(STAGE.place, game.hard ? pr.hardCrystals : pr.crystals, BIG_CRYSTALS.map((c) => c.color), game.hard); };
   showStageInfo();
 
@@ -571,7 +719,8 @@ function boot() {
       else { const t = questText(Q); if (game.hud.questText.textContent !== t) game.hud.questText.textContent = t; }
     }
     if (game.boss && game.boss.alive && game.boss.state !== 'enter') game.hud.setBoss(`🤖 ${game.boss.name}`, game.boss.hp / game.boss.maxHp);
-    if (pl.alive && stageIdx + 1 < STAGES.length && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) {
+    exitTick(dt);
+    if (pl.alive && stageIdx === 0 && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) {
       if (W.barrierUp && !leaving && !game.wentNext) game.hud.toast('🏃 기어 군단을 따돌렸다! 다음 대지로!', 'gold');
       if (net.shared) { // 같이 하기: 한 명이 도착하면 모두 함께 다음 대지로
         if (!game.wentNext) { game.wentNext = true; if (net.host) net.startAll(stageIdx + 1); else net.sendGame({ t: 'go', stage: stageIdx + 1 }); }
@@ -731,7 +880,7 @@ function boot() {
     showStageInfo();
     started = true;
     clock.getDelta();
-    playCine(buildIntro(), () => { startQuest(0); game.hud.toast(`${NAMES.characters[pl.kind]}(으)로 ${NAMES.stages[stageIdx]} 스테이지 시작!`); });
+    playCine(buildIntro(), () => { afterIntro(); startQuest(0); game.hud.toast(`${NAMES.characters[pl.kind]}(으)로 ${NAMES.stages[stageIdx]} 스테이지 시작!`); });
   }
   document.getElementById('start-btn').addEventListener('click', () => {
     if (net.code && net.host) { net.startAll(stageSel); return; }       // 방장: 다 같이 시작

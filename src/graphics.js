@@ -5,6 +5,7 @@ import { RenderPass } from '../vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from '../vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
 import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES, snowAmount } from './world.js';
+import { CFG } from './config.js';
 
 const NOISE_GLSL = `
 float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
@@ -110,6 +111,7 @@ export class Graphics {
 
     this._sky();
     this._clouds();
+    if (T.skyLand) this._lowClouds();
     this._water();
     if (T.grass) this._grass();
     this._smoke();
@@ -180,7 +182,7 @@ export class Graphics {
       uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, {
         time: { value: 0 }, deep: { value: new THREE.Color(T.waterDeep) }, shallow: { value: new THREE.Color(T.waterShallow) },
         swampCol: { value: new THREE.Color(T.swampWater) }, swamp: { value: new THREE.Vector3(sw.x, sw.z, sw.r) },
-        sunDir: { value: this.sunDir }, skyCol: { value: new THREE.Color(T.skyHorizon) }, frozen: { value: T.frozen ? 1 : 0 },
+        sunDir: { value: this.sunDir }, skyCol: { value: new THREE.Color(T.skyHorizon) }, frozen: { value: T.frozen ? 1 : 0 }, lava: { value: T.lava ? 1 : 0 },
       }]),
       vertexShader: `
         varying vec3 vW;
@@ -192,7 +194,7 @@ export class Graphics {
           #include <fog_vertex>
         }`,
       fragmentShader: `
-        uniform float time, frozen; uniform vec3 deep, shallow, swampCol, swamp, sunDir, skyCol; varying vec3 vW;
+        uniform float time, frozen, lava; uniform vec3 deep, shallow, swampCol, swamp, sunDir, skyCol; varying vec3 vW;
         ${NOISE_GLSL}
         #include <fog_pars_fragment>
         void main(){
@@ -209,19 +211,44 @@ export class Graphics {
           vec3 col = mix(base, skyCol, fres * 0.6) + vec3(spec);
           float alpha = mix(0.62, 0.93, fres);
           if (!gl_FrontFacing) { col = mix(base, vec3(0.75, 0.92, 1.0), 0.35); alpha = 0.55; }
+          if (lava > 0.5) { // 용암: 검게 굳은 껍질 사이로 끓어오르는 불빛
+            float n1 = vn(p * 0.045 + vec2(time * 0.04, -time * 0.03));
+            float n2 = vn(p * 0.19 - vec2(time * 0.11, time * 0.07));
+            float hot = smoothstep(0.45, 0.78, n1 * 0.55 + n2 * 0.45);
+            col = mix(vec3(0.16, 0.02, 0.01), mix(vec3(0.95, 0.22, 0.02), vec3(1.0, 0.62, 0.12), n2), hot) + vec3(0.12, 0.02, 0.0) + vec3(spec * 0.1);
+            alpha = 1.0;
+          }
           if (frozen > 0.5) { float cr = smoothstep(0.48, 0.5, vn(p * 0.15)) * (1.0 - smoothstep(0.5, 0.52, vn(p * 0.15))); col = mix(base, vec3(1.0), 0.25 + fres * 0.4) - cr * 0.15 + spec * 0.3; alpha = 1.0; }
           gl_FragColor = vec4(col, alpha);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
           #include <fog_fragment>
         }`,
-      transparent: !T.frozen, fog: true, depthWrite: !!T.frozen, side: THREE.DoubleSide,
+      transparent: !T.frozen && !T.lava, fog: true, depthWrite: !!T.frozen || !!T.lava, side: THREE.DoubleSide,
     });
     const water = new THREE.Mesh(new THREE.PlaneGeometry(6000, 6000, 1, 1), this.waterMat);
-    water.rotation.x = -Math.PI / 2; water.position.y = T.frozen ? 0.02 : -0.05;
+    water.rotation.x = -Math.PI / 2; water.position.y = T.frozen ? 0.02 : T.lava ? CFG.lava.level - 0.05 : -0.05;
+    water.visible = !T.skyLand; // 하늘 도시에는 물이 없음
     water.receiveShadow = false;
     this.scene.add(water);
     this.water = water;
+  }
+
+  // 하늘 도시: 구멍 아래와 땅 끝 너머에 깔린 푹신한 구름 (움직이지 않음)
+  _lowClouds() {
+    const N = this.mobile ? 220 : 480, Y = CFG.sky.cloudY;
+    this.lowClouds = new Billboards(N, cloudTexture(), { fog: true, shade: true });
+    this.lowClouds.mat.uniforms.shadeCol.value.set(0xc8d6ea);
+    let i = 0;
+    for (let k = 0; k < 40000 && i < N; k++) {
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 2500, x = Math.cos(a) * r, z = Math.sin(a) * r;
+      if (terrainHeight(x, z) > -20) continue;
+      const far = r > CFG.sky.edge;
+      this.lowClouds.set(i++, x, Y + 2 + Math.random() * (far ? 14 : 5), z, far ? 70 + Math.random() * 60 : 18 + Math.random() * 22, 1, 1, 1, 0.95);
+    }
+    for (; i < N; i++) this.lowClouds.set(i, 0, -999, 0, 0, 0, 0, 0, 0);
+    this.lowClouds.flush();
+    this.scene.add(this.lowClouds.mesh);
   }
 
   // 풀: 플레이어 주변에서 계속 돌려쓰는 풀밭 (지형 높이를 그림으로 만들어서 읽음)

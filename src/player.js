@@ -198,7 +198,10 @@ export class Player {
     const ready = this.canTransform();
     if (ready && !this.auraWasReady) { SFX.superReady(); this.game.hud.toast(`✨ ${NAMES.superForm} 변신 가능! 점프를 1.5초 꾹!`, 'gold'); }
     this.auraWasReady = ready;
-    if (this.pos.y < -60) this.die();
+    const W = this.game.world;
+    if (this.alive && W.mode === 'lava' && this.state !== 'loop' && this.pos.y < CFG.lava.level + 0.25 && W.lavaAt(this.pos.x, this.pos.z)) this.hazardDeath('lava');
+    else if (this.alive && W.mode === 'sky' && this.pos.y < CFG.sky.cloudY - 3) this.hazardDeath('void');
+    else if (this.pos.y < -60 && W.mode !== 'sky') this.die();
     this.ringCheckPos.copy(this.pos).add(new THREE.Vector3(0, 0.9, 0));
     this.updateView(dt);
   }
@@ -315,6 +318,7 @@ export class Player {
     // 지나가는 땅이 초토화: 폭발이 연달아 터지고, 나무·바위·벽이 부서짐
     const ground = this.pos.clone().setY(gy);
     this.smashAround(ground, R * 0.8);
+    this.melt(ground, R * 0.6);
     for (const w of this.game.world.walls) { if (w.dead) continue; const c = w.min.clone().add(w.max).multiplyScalar(0.5); if (Math.hypot(c.x - ground.x, c.z - ground.z) < R) this.breakWall(w); }
     const side = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     for (const k of [-1, 0, 1]) {
@@ -327,6 +331,9 @@ export class Player {
     if (Math.random() < 0.35) SFX.explosion();
     this.shake = Math.max(this.shake, 0.35);
   }
+
+  // 얼음 나라: 슈퍼 공격이 닿은 땅은 눈이 녹아 흙과 풀이 드러남 (같이 하기 중이면 모두에게)
+  melt(p, r) { if (this.superOn && this.game.world.mode === 'ice') this.game.melt?.(p, r); }
 
   // 파워형 슈퍼 펀치: 주먹 방향으로 넓게 퍼지며 70m까지 쾅!
   superPunch() {
@@ -343,6 +350,7 @@ export class Player {
     }
     const B = this.game.boss; if (B?.targetable && inCone(B.pos, B.R)) B.damage(2, this);
     for (let d = 4; d < 45; d += 6) this.smashAround(o.clone().addScaledVector(fwd, d).setY(this.pos.y), 3 + d * 0.25);
+    for (let d = 8; d < 60; d += 13) this.melt(o.clone().addScaledVector(fwd, d), 4 + d * 0.18);
     for (const w of this.game.world.walls) { if (w.dead) continue; const c = w.min.clone().add(w.max).multiplyScalar(0.5); if (inCone(c)) this.breakWall(w); }
     this.game.fx.coneBlast(o, fwd, C.superPunchRange, C.superPunchAngle);
     this.game.hud.flash('rgba(255,200,80,0.55)');
@@ -464,6 +472,7 @@ export class Player {
       for (const e of en.list) if (e.T.static && e.alive && e.pos.distanceTo(u.center) < B.ultPullRange) en.hit(e, 1, u.center);
       if (this.game.boss?.targetable && this.game.boss.pos.distanceTo(u.center) < B.ultPullRange * 1.2) this.game.boss.damage(2, this);
       this.smashAround(u.center.clone().setY(u.center.y - 9), 25);
+      this.melt(u.center, 22);
     }
     if (u.boom && u.t > u.boomT + 0.6) { this.ult = null; this.state = 'air'; this.vel.set(0, 2, 0); }
   }
@@ -534,6 +543,7 @@ export class Player {
     this.game.boss?.tryHit(this, this.pos, R, 1);
     if (n >= 3) this.stats.slamMulti = 1;
     if (sup) {
+      this.melt(this.pos, R * 0.75);
       this.game.fx.superSlam(this.pos.clone(), R);
       this.game.hud.flash('rgba(255,210,90,0.5)');
       SFX.explosion();
@@ -923,6 +933,8 @@ export class Player {
   }
 
   land(g, surf) {
+    if (surf === 'cloud') { this.cloudBounce(g); return; }
+    this.cloudChain = false;
     this.pos.y = g;
     this.springChain = false; this.springLevel = 0; this.cannonT = 0;
     this.state = 'ground';
@@ -1199,8 +1211,42 @@ export class Player {
     if (this.health <= 0) this.die();
   }
 
-  die() {
+  // 하늘 도시: 구멍 아래 구름은 푹신해서 스프링처럼 튀어 오름 (연달아 3번 밟으면 땅 위까지 높이!)
+  cloudBounce(g) {
+    const S = CFG.sky;
+    this.pos.y = g;
+    this.cloudLevel = this.cloudChain ? Math.min(3, (this.cloudLevel || 1) + 1) : 1;
+    this.cloudChain = true;
+    this.state = 'air'; this.standOn = null;
+    this.vel.y = S.bounce[this.cloudLevel - 1] * (this.superOn ? 1.15 : 1);
+    this.vel.x *= 0.8; this.vel.z *= 0.8;
+    this.ball = this.rolling = false;
+    if (this.slamming) { this.slamming = false; this.vel.y *= 1.1; }
+    this.cancelAbilities();
+    this.airActionUsed = false; this.holdValid = false; this.springChain = false;
+    this.flyGauge = CFG.flyer.gaugeMax;
+    const fx = this.game.fx, at = this.pos.clone().add(new THREE.Vector3(0, 0.3, 0));
+    fx.burst(at, 0xffffff, 10 + this.cloudLevel * 6, 6 + this.cloudLevel * 2);
+    if (this.cloudLevel > 1) fx.shockwave(this.pos.clone(), 2 + this.cloudLevel * 2, 0xdff4ff);
+    if (this.cloudLevel === 3) this.game.hud.toast('☁️ 슝~! 구름이 높이 튕겨 줬어요!');
+    SFX.spring();
+  }
+  // 용암에 빠지거나 하늘 끝에서 떨어짐: 링 30%를 잃고 체크포인트에서 다시 시작
+  hazardDeath(kind) {
+    if (this.state === 'dead' || this.voidFalling) return;
+    const keep = Math.floor(this.rings * (kind === 'lava' ? CFG.lava.ringKeep : CFG.sky.ringKeep)), lost = this.rings - keep;
+    if (kind === 'lava') {
+      this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.5, 0)), 0xff6a20, 26, 10);
+      this.game.fx.burst(this.pos.clone().add(new THREE.Vector3(0, 0.5, 0)), 0x3a3230, 12, 7);
+      this.game.hud.toast(`🔥 앗 뜨거! 용암에 빠졌어요${lost ? ` (링 -${lost})` : ''}`);
+      this.die(keep);
+    } else if (this.game.onVoidFall) { this.voidFalling = true; this.game.onVoidFall(keep, lost); }
+    else this.die(keep);
+  }
+
+  die(keepRings = 0) {
     if (this.state === 'dead') return;
+    this.keepRings = keepRings;
     this.state = 'dead'; this.alive = false;
     this.deadTimer = CFG.player.respawnDelay;
     this.health = 0;
@@ -1214,7 +1260,8 @@ export class Player {
     const cp = this.game.world.nearestCheckpoint(this.pos);
     this.spawnAt(cp.pos.clone().add(new THREE.Vector3(0, 0.3, 0)), this.yaw);
     this.health = CFG.player.maxHealth;
-    this.rings = 0;
+    this.rings = this.keepRings || 0; this.keepRings = 0;
+    this.voidFalling = false; this.cloudChain = false;
     this.invuln = 2;
     this.alive = true;
     this.view.root.visible = true;

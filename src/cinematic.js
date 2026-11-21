@@ -49,6 +49,8 @@ export class Cinematic {
     if (!this.active) return;
     const s = this.shots[this.i];
     this.t += dt;
+    s.tick?.(dt, this.t); // 장면 안에서 캐릭터를 움직일 때 (날아감·떨어짐)
+    if (!this.active || this.shots[this.i] !== s) return;
     const k = ease(Math.min(1, this.t / s.dur));
     const f = typeof s.from === 'function' ? s.from() : s.from, to = typeof s.to === 'function' ? s.to() : (s.to || f);
     this.camera.up.set(0, 1, 0);

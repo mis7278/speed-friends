@@ -4,9 +4,9 @@
 export const NAMES = {
   gameTitle: '스피드 프렌즈',
   ring: '링',
-  crystal: '크리스탈 씨앗',      // 그 땅의 시련(미션)을 해내면 크리스탈이 보내주는 씨앗 (3개 → 슈퍼 변신)
+  crystal: '크리스탈 씨앗',
   trial: '시련',
-  bigCrystal: '대지의 크리스탈', // 다섯 대지에 풍요를 주는 크리스탈
+  bigCrystal: '대지의 크리스탈', // 여섯 대지에 풍요를 주는 크리스탈 (각 대지의 땅속 깊이 잠들어 있음)
   empire: '기어 제국',
   healthItem: '체력 회복',
   superForm: '슈퍼',
@@ -14,12 +14,12 @@ export const NAMES = {
   scientist: '렌치 박사',    // 닥터 기어의 간부 과학자
   finalBoss: '기가 렌치 로봇', // 1스테이지 최종 보스
   island: '루미아 섬',
-  heartTree: '할아버지 나무',  // 숲의 크리스탈을 품은 나무
+  crystalSite: '크리스탈 광장',  // 대지 한가운데, 땅속에 크리스탈이 잠들어 있던 곳
   characters: {
     speed: '볼트',    // 스피드형
     flyer: '윙',      // 비행형
     power: '록',      // 파워형
     blink: '블링크',  // 순간이동형
   },
-  stages: ['숲속', '얼음 나라', '화산', '로봇 도시', '우주선'],
+  stages: ['숲속', '얼음 나라', '용암 섬', '하늘 도시'], // 6스테이지까지 예정 (5·6은 준비 중)
 };
