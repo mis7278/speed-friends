@@ -173,7 +173,7 @@ function boot() {
     else if (m.t === 'sn') W.meltSnow(new THREE.Vector3(+m.x || 0, 0, +m.z || 0), Math.min(40, +m.r || 0)); // 친구가 녹인 눈
     else if (m.t === 'ex') launchExit(true);
     else if (m.t === 'hh') { const h = W.breakHull?.(+m.a || 0, +m.y || 0); if (h) { addHullHole(h); game.fx.explosion(V(Math.cos(h.a) * CFG.world.barrierR, h.y + 1.5, Math.sin(h.a) * CFG.world.barrierR), 1.5); } }
-    else if ((m.t === 'sx' || m.t === 'sd') && game.shmup) { if (m.t === 'sx' && !game.shmup.active && started) { if (cine.active) cine.skip(); game.shmup.start(+m.tm || 0); } game.shmup.onNet(m); }                                                               // 친구가 대포·분출구를 탐 → 다 같이
+    else if ((m.t === 'sx' || m.t === 'sd' || m.t === 'sh') && game.shmup) { if (m.t === 'sx' && !game.shmup.active && started) { if (cine.active) cine.skip(); game.shmup.start(+m.tm || 0); } game.shmup.onNet(m); }                                                               // 친구가 대포·분출구를 탐 → 다 같이
     else if (m.t === 'ep' && !net.host && Array.isArray(m.a)) {
       for (let k = 0; k + 4 < m.a.length; k += 5) {
         const e = E.list[m.a[k] | 0]; if (!e || e.T.static) continue;
@@ -1120,7 +1120,7 @@ function boot() {
       playMusic('clear');
     });
   }
-  if (stageIdx === 5) game.shmup = new Shmup(game, { net, pl, onToast: (t) => game.hud.toast(t, 'gold'), onWin: () => playEnding() });
+  if (stageIdx === 5) game.shmup = new Shmup(game, { net, pl, myName: () => NAMES.characters[pl.kind], onToast: (t) => game.hud.toast(t, 'gold'), onWin: () => playEnding() });
   game.startGame = startGame;
   game.setCharacter = setCharacter;
   document.getElementById('loading').classList.add('hidden');

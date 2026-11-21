@@ -202,6 +202,7 @@ export class Net {
         return;
       case 'bye': this._remove(m.id); this._changed(); return;
       case 'eh': case 'rg': case 'bh': case 'ep': case 'bp': case 'tb': case 'wb': case 'ch': case 'gd': case 'go':
+      case 'sn': case 'ex': case 'hh': case 'sx': case 'sd': case 'sh': // 눈 녹이기·대포 탈출·외벽 구멍·비행 슈팅(시간·피해·하트)
         if (this.host && m.t !== 'ep' && m.t !== 'bp') this._broadcast(m, conn.peer);
         this.h.onGame?.(m);
         return;

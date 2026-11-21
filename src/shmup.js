@@ -18,6 +18,10 @@ export const SH = {
   bombCD: 60, bombDmg: 30,
   hp: 100, bulletDmg: 8, bodyDmg: 12, laserDmg: 20, respawn: 3,
   bossHp: 650,
+  heartHeal: 25,              // 하트 하나로 채우는 체력
+  heartDrop: 0.4,             // 몬스터를 물리쳤을 때 하트가 나올 확률 (육중한 로봇은 항상)
+  bossHeartEvery: 9,          // 보스전: 몇 초마다 하트가 날아오는지
+  heartDrift: 7,              // 하트가 플레이어 쪽으로 흘러오는 속도
 };
 const glow = (c, o = 1) => new THREE.MeshBasicMaterial({ color: c, toneMapped: false, transparent: o < 1, opacity: o, depthWrite: o >= 1 });
 
@@ -52,7 +56,7 @@ export class Shmup {
     const S = makeSchedule(); this.sched = S.list; this.waveEnd = S.end;
     this.enemies = new Map();     // id → 살아 있는 몬스터
     this.dead = new Set();        // 죽은 몬스터 id (모두 같음)
-    this.shots = []; this.bolts = [];
+    this.shots = []; this.bolts = []; this.hearts = new Map(); this.heartsTaken = new Set();
     this.lx = 0; this.lz = 6; this.vx = 0; this.vz = 0;
     this.fireT = 0; this.dashT = 0; this.dashCD = 0; this.auraCD = 0; this.bombCD = 0; this.downT = 0; this.invuln = 0;
     this.n = 1;
@@ -64,9 +68,9 @@ export class Shmup {
   get z0() { return this.t * SH.scroll; }
   start(t = 0) {
     this.active = true; this.t = t; this.n = Math.max(1, this.net?.shared ? this.net.count : 1);
-    const pl = this.pl; pl.superOn = true; pl.state = 'air'; pl.alive = true; pl.health = SH.hp; pl.view.root.visible = true;
+    const pl = this.pl = this.game.player || this.pl; // 지금 고른 캐릭터 pl.superOn = true; pl.state = 'air'; pl.alive = true; pl.health = SH.hp; pl.view.root.visible = true;
     document.body.classList.add('shmup');
-    this.game.hud.setQuest('최후의 결전', '닥터 기어의 함대를 물리쳐라! (자동 에너지탄 / A 대시 / B 오로라 / C 궁극기)');
+    this.game.hud.setQuest('최후의 결전', '닥터 기어의 함대를 물리쳐라! A 대시 · B 오로라 · C 궁극기 · ❤️ 하트는 체력이 필요한 친구가 먹기!');
     if (this.net?.shared && this.net.host) this.net.sendGame({ t: 'sx', tm: this.t });
     this.syncT = 1;
   }
@@ -75,6 +79,11 @@ export class Shmup {
   // ---- 같이 하기 소식 ----
   onNet(m) {
     if (m.t === 'sx') { if (Math.abs(m.tm - this.t) > 0.4) this.t = +m.tm; if (m.boss && this.phase === 'waves') this.startBoss(); }
+    else if (m.t === 'sh') { // 친구가 하트를 먹음 → 내 화면에서도 사라짐
+      const id = String(m.i); this.heartsTaken.add(id); const h = this.hearts.get(id);
+      if (h) { this.group.remove(h.mesh); this.hearts.delete(id); this.game.fx.burst(h.mesh.position.clone(), 0xff6a8a, 8, 5); }
+      this.o.onToast?.(`💗 ${m.who || '친구'}가 하트를 먹었어요!`);
+    }
     else if (m.t === 'sd') { const e = this.enemies.get(m.i | 0); if (e) this.damage(e, +m.d || 1, true); else if (m.i === -1 && this.boss) this.hitBoss(+m.d || 1, true); }
   }
 
@@ -110,6 +119,44 @@ export class Shmup {
     this.game.fx.explosion(e.pos.clone(), e.T.size * 0.6); this.game.fx.burst(e.pos.clone(), 0xffd040, 10, 10);
     SFX.enemyPop(); if (e.T.size > 2) SFX.explosion();
     this.kills = (this.kills || 0) + 1;
+    // 하트: 모두에게 같은 몬스터에서 나옴 (몬스터 번호로 정함)
+    const r = ((e.s.id * 2654435761) >>> 0) % 1000 / 1000;
+    if (e.s.type === 'heavy' || r < SH.heartDrop) this._heart('k' + e.s.id, e.pos.x, e.pos.z - this.z0);
+  }
+  // ---- 하트 (체력 회복): 먼저 먹은 한 명만! ----
+  _heart(id, lx, lz) {
+    if (this.hearts.has(id) || this.heartsTaken.has(id)) return;
+    if (!this.heartGeo) {
+      const sh = new THREE.Shape();
+      sh.moveTo(0, -0.5); sh.bezierCurveTo(-0.1, -0.35, -0.6, -0.1, -0.6, 0.2); sh.bezierCurveTo(-0.6, 0.55, -0.15, 0.6, 0, 0.3);
+      sh.bezierCurveTo(0.15, 0.6, 0.6, 0.55, 0.6, 0.2); sh.bezierCurveTo(0.6, -0.1, 0.1, -0.35, 0, -0.5);
+      this.heartGeo = new THREE.ExtrudeGeometry(sh, { depth: 0.3, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.06, bevelSegments: 1 }); this.heartGeo.center();
+      this.heartMat = new THREE.MeshBasicMaterial({ color: 0xff4d6d, toneMapped: false });
+      this.heartGlow = glow(0xff9ab0, 0.35);
+    }
+    const g = new THREE.Group(), m = new THREE.Mesh(this.heartGeo, this.heartMat); m.scale.setScalar(2.6); g.add(m);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(2.2, 12, 8), this.heartGlow); g.add(halo);
+    this.group.add(g);
+    this.hearts.set(id, { id, mesh: g, lx, lz, t: 0 });
+  }
+  _updateHearts(dt) {
+    const pl = this.pl;
+    for (const h of [...this.hearts.values()]) {
+      h.t += dt; h.lz -= SH.heartDrift * dt;
+      if (h.lz < SH.back - 12 || h.t > 25) { this.group.remove(h.mesh); this.hearts.delete(h.id); continue; } // 놓침
+      h.mesh.position.set(h.lx, 0.5 + Math.sin(h.t * 3) * 0.4, this.z0 + h.lz);
+      h.mesh.rotation.y = h.t * 2.5;
+      const full = pl.health >= SH.hp;
+      h.mesh.children[1].visible = !full || Math.floor(h.t * 4) % 2 === 0;
+      // 체력이 가득이면 먹지 않고 지나감 → 친구에게 양보할 수 있음
+      if (this.downT <= 0 && !full && Math.hypot(h.lx - this.lx, h.lz - this.lz) < 3) {
+        pl.health = Math.min(SH.hp, pl.health + SH.heartHeal);
+        this.group.remove(h.mesh); this.hearts.delete(h.id); this.heartsTaken.add(h.id);
+        this.game.fx.burst(pl.pos.clone(), 0xff6a8a, 16, 7); SFX.heal?.();
+        this.o.onToast?.(`❤️ 체력 +${SH.heartHeal}!`);
+        if (this.net?.shared) this.net.sendGame({ t: 'sh', i: h.id, who: this.o.myName?.() });
+      }
+    }
   }
   _shoot(from, dir, speed = 26, homing = 0) {
     const m = new THREE.Mesh(this.shotGeo, this.shotMat); m.position.copy(from); this.group.add(m);
@@ -141,7 +188,7 @@ export class Shmup {
     this.boss = { hp: Math.round(SH.bossHp * (1 + 0.6 * (this.n - 1))), max: 0, lx: 0, lz: 120, flash: 0 };
     this.boss.max = this.boss.hp;
     this.laser = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 120), glow(0xff3a5a, 0.35)); this.laser.visible = false; this.group.add(this.laser);
-    this.game.hud.setQuest('최종 보스: 닥터 기어의 최종 전함', '미사일을 피하면서 공격! 빨간 선이 보이면 레이저가 와요!');
+    this.game.hud.setQuest('최종 보스: 닥터 기어의 최종 전함', '미사일을 피하면서 공격! 빨간 선 = 레이저! ❤️ 하트가 날아오면 누가 먹을지 정해요');
     SFX.bossRoar?.(); this.o.onToast?.('⚠️ 닥터 기어의 최종 전함이 나타났다!');
   }
   hitBoss(d, remote = false) {
@@ -278,6 +325,9 @@ export class Shmup {
       if (gone) { this.group.remove(s.m); this.shots.splice(i, 1); }
     }
     if (this.boss) this._bossUpdate(dt);
+    // 보스전: 정해진 시간마다 하트가 날아옴 (모두에게 같은 자리)
+    if (this.boss && this.phase === 'boss') { const n = Math.floor(this.bossT / SH.bossHeartEvery); if (n > (this.lastBossHeart ?? 0)) { this.lastBossHeart = n; this._heart('b' + n, Math.sin(n * 1.7) * 38, SH.front + 6); } }
+    this._updateHearts(dt);
     // 카메라: 위 뒤에서 내려다봄
     const cam = this.camera;
     cam.up.set(0, 1, 0); cam.position.set(this.lx * 0.25, 40, z0 - 30); cam.lookAt(this.lx * 0.25, -4, z0 + 22);
