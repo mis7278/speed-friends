@@ -153,6 +153,8 @@ function boot() {
       const set = W.trees[m.k]; const ref = set && W.breakables.find((r) => r.set === set && r.idx === (m.i | 0));
       if (ref?.collider && W.breakTree(ref.collider)) { const t = ref.collider; game.fx.burst(new THREE.Vector3(t.x, t.y + 2, t.z), ref.kind === 'rock' ? 0x8f8b80 : 0x8b5a2b, 14, 8); }
     }
+    else if (m.t === 'gd') { if (W.barrierUp) guardians.trigger(new THREE.Vector3(+m.x || 0, 0, +m.z || 0), false); } // 친구가 장벽을 넘음 → 모두에게 로봇 군단
+    else if (m.t === 'go') { if (net.host && (m.stage | 0) === stageIdx + 1) net.startAll(stageIdx + 1); }       // 친구가 다음 대지 입구에 도착
     else if (m.t === 'wb') { const w = W.walls[m.i | 0]; if (w && !w.dead) pl.breakWall(w, true); }
     else if (m.t === 'ch') { const c = W.chests[m.i | 0]; if (c && !c.opened) { c.opened = true; const b = W.beacons.find((x) => x.name === c.name); if (b) b.found = true; game.hud.toast(`🎁 친구가 「${c.name}」 보물 상자를 열었어요!`); } }
     else if (m.t === 'bh') game.boss?.damage(+m.n || 1, null, true);
@@ -570,13 +572,15 @@ function boot() {
     }
     if (game.boss && game.boss.alive && game.boss.state !== 'enter') game.hud.setBoss(`🤖 ${game.boss.name}`, game.boss.hp / game.boss.maxHp);
     if (pl.alive && stageIdx + 1 < STAGES.length && pl.pos.z > CFG.world.exitR && Math.abs(pl.pos.x) < 140) {
-      if (W.barrierUp && !leaving) game.hud.toast('🏃 기어 군단을 따돌렸다! 다음 대지로!', 'gold');
-      goNextStage();
+      if (W.barrierUp && !leaving && !game.wentNext) game.hud.toast('🏃 기어 군단을 따돌렸다! 다음 대지로!', 'gold');
+      if (net.shared) { // 같이 하기: 한 명이 도착하면 모두 함께 다음 대지로
+        if (!game.wentNext) { game.wentNext = true; if (net.host) net.startAll(stageIdx + 1); else net.sendGame({ t: 'go', stage: stageIdx + 1 }); }
+      } else goNextStage();
     }
     exploreTick(dt);
     net.update(dt);
     // 장벽을 몰래 넘어가면 기어 군단이 막음
-    if (W.barrierUp && pl.alive && Math.hypot(pl.pos.x, pl.pos.z) > CFG.world.barrierR + 8) guardians.trigger();
+    if (W.barrierUp && pl.alive && Math.hypot(pl.pos.x, pl.pos.z) > CFG.world.barrierR + 8) guardians.trigger(pl.pos, true);
     guardians.update(dt);
 
     bigStar.rotation.y = game.time * 1.5;

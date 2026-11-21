@@ -113,7 +113,7 @@ export const CFG = {
   cannon: { speed: 85, flightTime: 2.6 }, // 하늘 섬 대포: 발사 속도, 멀리 날아가는 시간(초)
   spring: { power: 27 },
   world: { barrierR: 1680, exitR: 2150, terrainHalf: 2600 },
-  guardian: { count: 6, speed: 41, hardSpeed: 50, startDist: 95, laserEvery: 2.6, laserWarn: 0.8, laserRadius: 4.5, stompRange: 26, damage: 3 }, // 장벽 너머 기어 군단: 아주 빠르고 강함 (슈퍼면 겨우 도망칠 수 있음)
+  guardian: { count: 12, near: 5, speed: 41, hardSpeed: 50, startDist: 95, laserEvery: 2.6, laserWarn: 0.8, laserRadius: 4.5, stompRange: 26, damage: 3 }, // 장벽 너머 기어 군단: 아주 빠르고 강함 (슈퍼면 겨우 도망칠 수 있음)
   camera: {
     distance: 9.5,
     minPitch: -0.25,

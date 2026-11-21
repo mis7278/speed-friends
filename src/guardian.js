@@ -39,17 +39,20 @@ export class Guardians {
   }
   get speed() { return this.game.hard ? CFG.guardian.hardSpeed : CFG.guardian.speed; }
 
-  trigger() {
+  // at: 장벽을 넘은 곳 (같이 하기: 누가 넘든 모두에게 똑같이 — 넘은 곳 근처 + 장벽 바깥 둘레 전체에 우르르)
+  trigger(at = null, broadcast = true) {
     if (this.active) return;
     const pl = this.game.player, W = this.game.world;
     this.active = true; this.t = 0; this.leaveT = 0; this.escapeToast = false;
-    const c = pl.pos, out = V(c.x, 0, c.z).normalize(), side = V(out.z, 0, -out.x);
-    const D = CFG.guardian.startDist;
-    // 뒤(장벽 쪽)·옆·앞(바깥쪽)에서 나타남: 앞을 막는 녀석도 있음
-    const spots = [[-1.0, 0], [-0.8, 0.9], [-0.8, -0.9], [0.2, 1.3], [0.2, -1.3], [1.5, 0.15]];
+    const c = (at || pl.pos).clone();
+    if (broadcast && this.game.net?.shared) this.game.net.sendGame({ t: 'gd', x: +c.x.toFixed(1), z: +c.z.toFixed(1) });
+    const out = V(c.x, 0, c.z).normalize(), side = V(out.z, 0, -out.x);
+    const D = CFG.guardian.startDist, near = CFG.guardian.near, R = CFG.world.barrierR + 70, a0 = Math.atan2(c.z, c.x);
+    const spots = [[-1.0, 0], [-0.8, 0.9], [-0.8, -0.9], [0.2, 1.3], [1.5, 0.15]];
     this.robots.forEach((g, i) => {
-      const [f, s] = spots[i % spots.length];
-      const p = c.clone().addScaledVector(out, f * D).addScaledVector(side, s * D * 0.8);
+      let p;
+      if (i < near) { const [f, s] = spots[i]; p = c.clone().addScaledVector(out, f * D).addScaledVector(side, s * D * 0.8); }
+      else { const a = a0 + (i - near + 1) / (this.robots.length - near + 1) * Math.PI * 2; p = V(Math.cos(a) * R, 0, Math.sin(a) * R); }
       g.userData.y0 = W.groundAt(p.x, p.z, 999);
       g.position.set(p.x, g.userData.y0 - 45, p.z);
       g.lookAt(c.x, g.position.y, c.z);
@@ -112,18 +115,26 @@ export class Guardians {
       g.position.y += (g.userData.y0 - g.position.y) * Math.min(1, dt * 2.2);
     }
     if (cineOnly) return;
-    // 장벽 안으로 돌아오거나 쓰러지면 돌아감
-    const r = Math.hypot(pl.pos.x, pl.pos.z);
-    if (!pl.alive || (r < CFG.world.barrierR - 30 && pl.pos.z < CFG.world.barrierR)) {
+    // 쫓아갈 대상: 장벽 밖에 있는 플레이어 (나 + 같이 하는 친구들)
+    const outside = (p) => Math.hypot(p.x, p.z) > CFG.world.barrierR - 30 || p.z > CFG.world.barrierR;
+    const targets = [];
+    if (pl.alive && outside(pl.pos)) targets.push({ pos: pl.pos, me: true, vel: pl.vel, s: pl.s, yaw: pl.yaw, state: pl.state });
+    for (const f of game.net?.proxies?.() || []) if (outside(f.pos)) targets.push({ pos: f.pos, me: false });
+    // 장벽 밖에 아무도 없으면 돌아감
+    if (!targets.length) {
       this.leaveT += dt;
       for (const g of this.robots) g.position.y -= dt * 30;
       if (this.leaveT > 2) { this.stop(); if (pl.alive) game.hud.toast(`🤖 ${NAMES.villain}: 흥, 겁먹고 돌아갔군!`, ''); }
       return;
     }
+    this.leaveT = 0;
     if (!this.escapeToast && pl.pos.z > CFG.world.exitR - 150 && Math.abs(pl.pos.x) < 140) { this.escapeToast = true; game.hud.toast('조금만 더! 눈길 끝까지 달려!', 'gold'); }
     const sp = this.speed * (this.t < 3 ? 0.5 : 1);
     this.robots.forEach((g, i) => {
       const u = g.userData;
+      let tg = targets[0], best = Infinity;
+      for (const t of targets) { const dd = (t.pos.x - g.position.x) ** 2 + (t.pos.z - g.position.z) ** 2; if (dd < best) { best = dd; tg = t; } }
+      const c = tg.pos.clone().add(V(0, 1, 0));
       const to = V(c.x - g.position.x, 0, c.z - g.position.z), d = to.length();
       // 쫓아가기 (발 구르기 중엔 멈춤)
       if (u.stomping > 0) {
@@ -134,7 +145,7 @@ export class Guardians {
           const foot = g.position.clone().setY(u.y0);
           game.fx.shockwave(foot, G.stompRange, 0xffa040); game.fx.burst(foot.clone().add(V(0, 1, 0)), 0x8a7a5a, 20, 12);
           SFX.slamHit(); pl.shake = Math.max(pl.shake, 0.6);
-          if (pl.pos.distanceTo(foot) < G.stompRange && pl.pos.y < foot.y + 8) this._damage(pl, foot, G.damage);
+          if (outside(pl.pos) && pl.pos.distanceTo(foot) < G.stompRange && pl.pos.y < foot.y + 8) this._damage(pl, foot, G.damage);
         }
       } else if (d > 9) {
         const step = Math.min(d - 8, sp * dt);
@@ -144,7 +155,7 @@ export class Guardians {
         const ph = this.t * 5 + i;
         u.legs[0].rotation.x = Math.sin(ph) * 0.5; u.legs[1].rotation.x = -Math.sin(ph) * 0.5;
         u.body.position.y = Math.abs(Math.cos(ph)) * 1.2;
-      } else if (pl.alive) { // 붙잡힘
+      } else if (tg.me && pl.alive) { // 붙잡힘
         game.fx.explosion(c, 2); SFX.explosion();
         pl.superOn = false; pl.invuln = 0; pl.die();
         game.hud.toast('기어 군단에게 붙잡혔어요! 퀘스트를 모두 깨고 장벽을 무너뜨려요!', '');
@@ -156,9 +167,9 @@ export class Guardians {
       if (d < G.stompRange && u.stomping <= 0 && u.stompT <= 0) { u.stomping = 0.55; u.stompT = 2.2; }
       else if (u.laserT <= 0 && d < 160) {
         u.laserT = G.laserEvery * (0.8 + Math.random() * 0.4);
-        const lead = V(pl.vel.x, 0, pl.vel.z).multiplyScalar(pl.state === 'ground' ? 0 : 0.3);
-        if (pl.state === 'ground') lead.set(Math.sin(pl.yaw) * pl.s * 0.3, 0, Math.cos(pl.yaw) * pl.s * 0.3);
-        const tgt = pl.pos.clone().add(lead); tgt.y = W.groundAt(tgt.x, tgt.z, pl.pos.y + 2) + 0.5;
+        const lead = V(0, 0, 0);
+        if (tg.me) { if (pl.state === 'ground') lead.set(Math.sin(pl.yaw) * pl.s * 0.3, 0, Math.cos(pl.yaw) * pl.s * 0.3); else lead.set(pl.vel.x * 0.3, 0, pl.vel.z * 0.3); }
+        const tgt = tg.pos.clone().add(lead); tgt.y = W.groundAt(tgt.x, tgt.z, tg.pos.y + 2) + 0.5;
         this._aim(g, tgt);
       }
     });
