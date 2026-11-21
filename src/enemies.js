@@ -121,17 +121,31 @@ function critterMesh(kind) {
   }
   return g;
 }
-const CRITTER_OF = { beetle: 'bunny', crawler: 'bunny', tank: 'squirrel', wasp: 'bird', flyer: 'bird', hopper: 'frog' };
+// 미사일 로봇: 다리 달린 포탑. 빨간 불이 깜빡이면 곧 미사일 발사!
+function gunnerMesh() {
+  const g = new THREE.Group();
+  for (const s of [-1, 1]) for (const z of [-0.6, 0.6]) { const l = mesh(G.box, mat(0x3a4048), s * 0.9, 0.6, z, 0.25, 1.2, 0.25); l.rotation.z = s * 0.35; g.add(l); }
+  g.add(mesh(G.box, mat(0x5a8a3a), 0, 1.6, 0, 1.6, 1.0, 1.6));
+  g.add(mesh(G.box, mat(0xffc233), 0, 1.15, 0, 1.65, 0.15, 1.65));
+  const head = new THREE.Group(); head.position.y = 2.25; g.add(head);
+  head.add(mesh(G.sph, mat(0x50565f), 0, 0, 0, 0.75, 0.55, 0.75));
+  for (const s of [-1, 1]) { const b = mesh(G.cyl, mat(0x2a2e35), s * 0.45, 0.05, 0.7, 0.22, 1.1, 0.22); b.rotation.x = Math.PI / 2; head.add(b); }
+  const lamp = mesh(G.sph, glow(0xff2010), 0, 0.5, 0.1, 0.18, 0.18, 0.18); head.add(lamp);
+  g.userData.head = head; g.userData.lamp = lamp;
+  return g;
+}
+const CRITTER_OF = { beetle: 'bunny', crawler: 'bunny', tank: 'squirrel', wasp: 'bird', flyer: 'bird', hopper: 'frog', gunner: 'squirrel' };
 
 const TYPES = {
   tower: { make: towerMesh, hp: 5, radius: 2.0, speed: 0, color: 0xff5030, static: true, harmless: true, noRespawn: true, big: true },
   machine: { make: machineMesh, hp: 6, radius: 3.6, speed: 0, color: 0xffa030, static: true, harmless: true, noRespawn: true, big: true },
-  beetle: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545 },
-  crawler: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545 },
-  tank: { make: tankMesh, hp: 10, armor: 2, radius: 1.3, speed: 0.75, color: 0xc0652e },
-  wasp: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true },
-  flyer: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true },
-  hopper: { make: hopperMesh, hp: 5, armor: 1, radius: 1.0, speed: 0.9, color: 0x7ac043, hops: true },
+  beetle: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545, size: 2.0 },
+  crawler: { make: beetleMesh, hp: 3, armor: 0, radius: 1.0, speed: 1, color: 0xe84545, size: 2.0 },
+  tank: { make: tankMesh, hp: 10, armor: 2, radius: 1.3, speed: 0.75, color: 0xc0652e, size: 1.7 },
+  wasp: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.8 },
+  flyer: { make: waspMesh, hp: 2, armor: 0, radius: 0.9, speed: 1.15, color: 0x8a4dff, flying: true, size: 1.8 },
+  hopper: { make: hopperMesh, hp: 5, armor: 1, radius: 1.0, speed: 0.9, color: 0x7ac043, hops: true, size: 1.9 },
+  gunner: { make: gunnerMesh, hp: 6, armor: 1, radius: 1.5, speed: 0.45, color: 0x5a8a3a, size: 1.25, shoots: true },
 };
 
 export class Enemies {
@@ -190,7 +204,7 @@ export class Enemies {
       type: sp.type, T, home, pos: home.clone(), yaw: Math.random() * 6.28, mesh, camp: !!sp.camp,
       alive: true, respawnTimer: 0, dying: 0, knock: new THREE.Vector3(), hp: T.hp, maxHp: T.hp,
       tag: sp.tag || null, leash: sp.leash || 30, shielded: false,
-      wanderT: Math.random() * 10, radius: T.radius, flying: !!T.flying, asleep: false, hopT: Math.random() * 2, vy: 0, hitFlash: 0,
+      wanderT: Math.random() * 10, radius: T.radius * (T.size || 1), flying: !!T.flying, idx: this.list.length, shootT: 2 + Math.random() * 2, asleep: false, hopT: Math.random() * 2, vy: 0, hitFlash: 0,
     };
     if (mesh) { mesh.position.copy(e.pos); this.scene.add(mesh); }
     if (T.static) { // 보호막 (주변 로봇을 먼저 물리쳐야 꺼짐)
@@ -203,7 +217,10 @@ export class Enemies {
 
   _ensureMesh(e) {
     if (e.mesh) return;
-    e.mesh = e.T.make(); e.mesh.position.copy(e.pos); this.scene.add(e.mesh);
+    const inner = e.T.make(), sz = e.T.size || 1;
+    inner.scale.setScalar(sz);
+    e.mesh = new THREE.Group(); e.mesh.add(inner); e.mesh.userData = inner.userData; // 크기는 안쪽, 맞았을 때 출렁임은 바깥
+    e.mesh.position.copy(e.pos); this.scene.add(e.mesh);
   }
   // 체력 막대 (맞으면 잠깐 보임)
   _bar(e) {
@@ -218,8 +235,9 @@ export class Enemies {
     }
     return e.bar;
   }
-  hit(e, dmg, fromPos, knockPower = 10, launch = false) {
+  hit(e, dmg, fromPos, knockPower = 10, launch = false, remote = false) {
     if (!e.alive || e.dying > 0) return false;
+    if (!remote && this.game?.net?.shared) this.game.net.sendGame({ t: 'eh', i: e.idx, d: dmg, f: [+fromPos.x.toFixed(1), +fromPos.y.toFixed(1), +fromPos.z.toFixed(1)], k: knockPower, l: launch ? 1 : 0 });
     if (!e.T.static) dmg = Math.max(1, Math.round(dmg) - (e.T.armor || 0)); // 방어력만큼 덜 아픔
     e.barT = 4;
     if (e.T.static) { if (e.hitCD > 0) return false; e.hitCD = 0.45; }
@@ -260,6 +278,7 @@ export class Enemies {
 
   update(dt, time, players) {
     this._updateCritters(dt, time);
+    this._updateMissiles(dt);
     const C = CFG.enemies;
     const frozen = (this.game?.freezeT || 0) > 0;
     for (const e of this.list) {
@@ -274,7 +293,7 @@ export class Enemies {
       if (e.alive && e.dying <= 0 && e.barT > 0 && e.hp < e.maxHp) {
         const b = this._bar(e), f = b.userData.fill, k = Math.max(0, e.hp / e.maxHp);
         b.visible = true;
-        b.position.copy(e.pos).add(new THREE.Vector3(0, (e.T.static ? 9 : e.flying ? 1.4 : 2.2) * (e.T.static ? 1 : 1), 0));
+        b.position.copy(e.pos).add(new THREE.Vector3(0, e.T.static ? 9 : (e.flying ? 1.4 : 2.2) * (e.T.size || 1), 0));
         if (this.game?.camera) b.quaternion.copy(this.game.camera.quaternion);
         b.scale.setScalar(e.T.static ? 2.5 : 1 + e.maxHp * 0.03);
         f.scale.x = k;
@@ -282,7 +301,7 @@ export class Enemies {
       }
       if (!e.alive) {
         e.respawnTimer -= dt;
-        if (e.T.noRespawn) continue;
+        if (e.T.noRespawn || this.netClient) continue; // 친구 쪽은 방장이 다시 살림
         if (e.respawnTimer <= 0 && e.home.distanceTo(near.pos) > 15) {
           e.alive = true; e.hp = e.maxHp; e.pos.copy(e.home); e.mesh.visible = true; e.mesh.rotation.set(0, 0, 0); e.mesh.scale.setScalar(1);
         }
@@ -325,6 +344,17 @@ export class Enemies {
         continue;
       }
       if (e.stunT > 0) { e.stunT -= dt; e.mesh.position.copy(e.pos); e.mesh.rotation.z = Math.sin(time * 30) * 0.15 * e.stunT; continue; }
+      if (e.T.shoots) this._shoot(e, dt, time, near, nd);
+      if (this.netClient && e.netPos) { // 방장이 보낸 위치로 부드럽게
+        if (e.pos.distanceTo(e.netPos) > 25) e.pos.copy(e.netPos); else e.pos.lerp(e.netPos, Math.min(1, dt * 10));
+        let dy = (e.netYaw ?? e.yaw) - e.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); e.yaw += dy * Math.min(1, dt * 10);
+        e.mesh.position.copy(e.pos); e.mesh.rotation.y = e.yaw;
+        e.hitFlash = Math.max(0, e.hitFlash - dt); e.mesh.scale.setScalar(1 + e.hitFlash * 0.4);
+        const u = e.mesh.userData;
+        if (u.wings) for (const w of u.wings) w.rotation.z = Math.sin(time * 50) * 0.5;
+        if (u.legs) u.legs.forEach((l, i) => (l.rotation.x = Math.sin(time * 14 + i) * 0.4));
+        continue;
+      }
       const H = this.game?.hard;
       let tx, tz, speed = C.speed * e.T.speed * (H ? CFG.hard.enemySpeed : 1);
       if (nd < C.chaseRange * (H ? CFG.hard.chaseRange : 1) && near.alive) { tx = near.pos.x; tz = near.pos.z; }
@@ -351,7 +381,7 @@ export class Enemies {
       const LR = e.leash;
       if (hd > LR) { const k = Math.max(LR / hd, 1 - dt * 1.5); e.pos.x = e.home.x + (e.pos.x - e.home.x) * k; e.pos.z = e.home.z + (e.pos.z - e.home.z) * k; } // 멀리 날아갔으면 천천히 돌아옴
       const g = this.world.groundAt(e.pos.x, e.pos.z, e.pos.y + 1);
-      if (e.flying) e.pos.y = Math.max(g, 0) + 2.2 + Math.sin(time * 2 + e.wanderT) * 0.4;
+      if (e.flying) e.pos.y = Math.max(g, 0) + 2.2 * (e.T.size || 1) + Math.sin(time * 2 + e.wanderT) * 0.4;
       else if (e.T.hops) { e.vy -= 30 * dt; e.pos.y += e.vy * dt; if (e.pos.y < g) { e.pos.y = g; e.vy = 0; } }
       else e.pos.y = g;
       e.mesh.position.copy(e.pos);
@@ -365,6 +395,51 @@ export class Enemies {
     }
   }
 
+  // ---- 미사일 로봇 ----
+  _shoot(e, dt, time, near, nd) {
+    const u = e.mesh.userData, me = this.game?.player;
+    if (!me || !me.alive) return;
+    const d = me.pos.distanceTo(e.pos);
+    e.shootT -= dt;
+    if (u.head) { const want = Math.atan2(me.pos.x - e.pos.x, me.pos.z - e.pos.z) - e.yaw; u.head.rotation.y += Math.atan2(Math.sin(want - u.head.rotation.y), Math.cos(want - u.head.rotation.y)) * Math.min(1, dt * 5); }
+    const warn = e.shootT < 0.8 && d < 55;
+    if (u.lamp) u.lamp.scale.setScalar(warn ? 0.18 * (1.4 + Math.sin(time * 30)) : 0.18);
+    if (e.shootT > 0) return;
+    e.shootT = 3 + Math.random() * 1.5;
+    if (d > 55 || d < 4) return;
+    const from = e.pos.clone().add(new THREE.Vector3(0, 2.8 * (e.T.size || 1), 0));
+    const dir = me.pos.clone().add(new THREE.Vector3(0, 1, 0)).sub(from).normalize();
+    this.missiles ??= [];
+    if (!this.misGeo) { this.misGeo = new THREE.CylinderGeometry(0.18, 0.18, 1.1, 8); this.misGeo.rotateX(Math.PI / 2); this.misMat = new THREE.MeshLambertMaterial({ color: 0xd83a2a, emissive: 0x400000 }); this.misTip = new THREE.MeshBasicMaterial({ color: 0xffd040, toneMapped: false }); }
+    const m = new THREE.Mesh(this.misGeo, this.misMat);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 5), this.misTip); tip.position.z = -0.6; m.add(tip);
+    m.position.copy(from); this.scene.add(m);
+    this.missiles.push({ m, pos: from, vel: dir.multiplyScalar(17), life: 5 });
+    this.fx.burst(from.clone(), 0xffa030, 5, 4);
+    SFX.punch?.();
+  }
+  _updateMissiles(dt) {
+    if (!this.missiles?.length) return;
+    const me = this.game.player;
+    for (let i = this.missiles.length - 1; i >= 0; i--) {
+      const s = this.missiles[i];
+      s.life -= dt;
+      if (me?.alive) { // 천천히 따라옴
+        const want = me.pos.clone().add(new THREE.Vector3(0, 1, 0)).sub(s.pos).normalize().multiplyScalar(s.vel.length());
+        s.vel.lerp(want, Math.min(1, dt * 1.1));
+      }
+      s.pos.addScaledVector(s.vel, dt);
+      s.m.position.copy(s.pos); s.m.lookAt(s.pos.clone().sub(s.vel));
+      if (Math.random() < 0.5) this.fx.burst(s.pos.clone(), 0xcccccc, 1, 1);
+      let boom = s.life <= 0 || s.pos.y < this.world.groundAt(s.pos.x, s.pos.z, s.pos.y + 1);
+      if (me?.alive && s.pos.distanceTo(me.pos.clone().add(new THREE.Vector3(0, 0.9, 0))) < 1.5) {
+        boom = true;
+        if (me.attacking) { this.fx.burst(s.pos.clone(), 0xffffff, 8, 6); } // 공격 중이면 미사일을 부숨
+        else me.hurt(s.pos);
+      }
+      if (boom) { this.fx.explosion(s.pos.clone(), 0.5); SFX.explosion(); this.scene.remove(s.m); this.missiles.splice(i, 1); }
+    }
+  }
   inRadius(pos, r) {
     const out = [];
     for (const e of this.list) {

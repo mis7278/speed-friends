@@ -291,8 +291,9 @@ export class Boss {
     if (!this.vulnerable && !player.superOn) return false;
     return this.damage(dmg, player);
   }
-  damage(n, player) {
-    if (this.invulnT > 0 || !this.targetable) return false;
+  damage(n, player, remote = false) {
+    if (!this.targetable || (!remote && this.invulnT > 0)) return false;
+    if (!remote && this.game.net?.shared) this.game.net.sendGame({ t: 'bh', n });
     this.hp = Math.max(0, this.hp - n);
     this.invulnT = 0.9;
     SFX.bossHit();

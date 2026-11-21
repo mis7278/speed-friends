@@ -140,8 +140,27 @@ function boot() {
     getKind: () => pl.kind, isStarted: () => started, getStage: () => stageSel,
     getQuest: () => (q.i >= 0 ? q.i : (q.pending ?? 0)),
     onStart: (stage) => coopStart(stage), onQuest: (n, fromFriend) => syncQuest(n, fromFriend), onChange: () => renderCoop(),
+    onGame: (m) => onNetGame(m),
   });
   game.net = net; game.hud.friends = net.remotes;
+  game.rings.net = net;
+  // 친구 쪽에서 온 몬스터·링·보스 소식
+  function onNetGame(m) {
+    const E = game.enemies;
+    if (m.t === 'eh') { const e = E.list[m.i | 0]; if (e && Array.isArray(m.f)) E.hit(e, +m.d || 1, new THREE.Vector3(+m.f[0] || 0, +m.f[1] || 0, +m.f[2] || 0), +m.k || 10, !!m.l, true); }
+    else if (m.t === 'rg') game.rings.takeRemote(m.i | 0);
+    else if (m.t === 'bh') game.boss?.damage(+m.n || 1, null, true);
+    else if (m.t === 'ep' && !net.host && Array.isArray(m.a)) {
+      for (let k = 0; k + 4 < m.a.length; k += 5) {
+        const e = E.list[m.a[k] | 0]; if (!e || e.T.static) continue;
+        if (!e.alive && e.dying <= 0) { e.alive = true; e.hp = e.maxHp; if (e.mesh) { e.mesh.visible = true; e.mesh.rotation.set(0, 0, 0); e.mesh.scale.setScalar(1); } e.pos.set(m.a[k + 1], m.a[k + 2], m.a[k + 3]); }
+        (e.netPos ??= new THREE.Vector3()).set(m.a[k + 1], m.a[k + 2], m.a[k + 3]); e.netYaw = m.a[k + 4];
+        if (e.pos.distanceTo(e.netPos) > 25 || e.asleep) { e.pos.copy(e.netPos); e.yaw = e.netYaw; } // 멀리 있던 몬스터는 바로 그 자리로
+      }
+    } else if (m.t === 'bp' && !net.host && game.boss && Array.isArray(m.p)) {
+      game.boss.netPos = new THREE.Vector3(+m.p[0], +m.p[1], +m.p[2]); game.boss.netYaw = +m.y;
+    }
+  }
   function pickChar(k) {
     for (const el of $id('cards').children) el.classList.toggle('sel', el.dataset.kind === k);
     if (k !== pl.kind) { setCharacter(k); if (started) { pl.spawnAt(W.nearestCheckpoint(game.player.pos).pos.clone().add(V(0, 0.3, 0)), 0); } }
@@ -513,12 +532,19 @@ function boot() {
     }
     if (steps === 5) acc = 0;
     game.freezeT = Math.max(0, game.freezeT - dt);
-    game.enemies.update(dt, game.time, game.players);
+    game.enemies.netClient = net.shared && !net.host;
+    game.rings.players = net.shared ? net.count : 1; // 인원이 많을수록 링이 더 빨리 다시 생김
+    game.enemies.update(dt, game.time, net.shared && net.host ? [...game.players, ...net.proxies()] : game.players);
     game.rings.update(dt, game.time, game.players);
     game.pickups.update(dt, game.time, game.players, W);
     game.fx.update(dt);
     W.update(dt, game.time);
     game.boss?.update(dt, game.time);
+    if (game.boss?.netPos && net.shared && !net.host) { // 보스 위치는 방장 기준
+      const b = game.boss; b.pos.lerp(b.netPos, Math.min(1, dt * 8));
+      let dy = b.netYaw - b.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); b.yaw += dy * Math.min(1, dt * 8);
+      b.mesh.position.copy(b.pos); b.mesh.rotation.y = b.yaw;
+    }
     sci.update(dt, game.time);
     game.cam.update(dt, pl, input, W);
     W.stream(pl.pos, dt);

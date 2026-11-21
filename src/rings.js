@@ -47,6 +47,11 @@ export class Rings {
     this._m = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._s = new THREE.Vector3(); this._e = new THREE.Euler();
   }
 
+  // 친구가 먹은 링
+  takeRemote(i) {
+    if (!this.active[i]) return;
+    this.active[i] = false; this.timer[i] = CFG.rings.respawn / (this.players || 1); this.off.push(i);
+  }
   // count개를 pos 주변에 흩뿌림
   scatter(pos, count) {
     const n = Math.min(count, this.scattered.length);
@@ -96,8 +101,9 @@ export class Rings {
         for (const i of list) {
           if (!this.active[i]) continue;
           if (this.spots[i].distanceToSquared(c) < R2) {
-            this.active[i] = false; this.timer[i] = CFG.rings.respawn; this.off.push(i);
+            this.active[i] = false; this.timer[i] = CFG.rings.respawn / (this.players || 1); this.off.push(i);
             pl.collectRing(1);
+            this.net?.shared && this.net.sendGame({ t: 'rg', i });
           }
         }
       }

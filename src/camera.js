@@ -86,6 +86,7 @@ export class CameraRig {
       if (cam.position.y < g && player.state !== 'swim') cam.position.y = g;
     }
     this._fadeWalls(dt, world, cam.position, this.target, fp);
+    world.occludeTrees(cam.position, fp ? cam.position : player.pos.clone().setY(player.pos.y + 1));
     if (player.shake > 0) {
       const k = player.shake * 1.2;
       cam.position.x += (Math.random() - 0.5) * k; cam.position.y += (Math.random() - 0.5) * k;

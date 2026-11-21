@@ -945,10 +945,11 @@ export class Player {
     }
     // 몬스터
     const center = this.pos.clone().add(new THREE.Vector3(0, 0.8, 0));
-    for (const e of this.game.enemies.inRadius(this.pos, 6)) {
-      const ec = e.pos.clone().add(new THREE.Vector3(0, e.flying ? 0 : 0.6, 0));
+    for (const e of this.game.enemies.inRadius(this.pos, 8)) {
+      const esz = e.T.size || 1;
+      const ec = e.pos.clone().add(new THREE.Vector3(0, e.flying ? 0 : 0.6 * esz, 0));
       const dh = Math.hypot(ec.x - center.x, ec.z - center.z), dy = Math.abs(ec.y - center.y);
-      if (dh > e.radius + 0.7 || dy > 1.6) continue;
+      if (dh > e.radius + 0.7 || dy > 1.6 + (esz - 1) * 0.9) continue;
       if (e.flyT > 0) continue;
       const stomp = this.state === 'air' && this.vel.y < -2 && center.y > ec.y + 0.4;
       if (this.attacking || stomp) {

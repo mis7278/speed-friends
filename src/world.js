@@ -297,6 +297,13 @@ class TreeSet {
       if (p.mesh.instanceColor) p.mesh.instanceColor.needsUpdate = true;
     }
   }
+  show(i) {
+    const n = this.slot.get(i), d = this.data[i];
+    if (n == null || d.dead) return;
+    const mm = new THREE.Matrix4();
+    _m.compose(_p.set(d.x, d.y, d.z), _q.setFromEuler(_e.set(0, d.ry, 0)), _s.set(d.s, d.sy, d.s));
+    for (const p of this.parts) { mm.multiplyMatrices(_m, p.local); p.mesh.setMatrixAt(n, mm); p.mesh.instanceMatrix.needsUpdate = true; }
+  }
   hide(i) {
     const n = this.slot.get(i);
     if (n == null) return;
@@ -570,6 +577,32 @@ export class World {
     const h = terrainHeight(x, z);
     const slope = Math.hypot(terrainHeight(x + 0.5, z) - terrainHeight(x - 0.5, z), terrainHeight(x, z + 0.5) - terrainHeight(x, z - 0.5));
     return Math.min(3, Math.max(0, Math.max(h00, h10, h01, h11) > h ? mesh - h : 0) + Math.min(0.5, slope * 0.35));
+  }
+  // 카메라와 캐릭터 사이에 있는 나무는 잠깐 숨김 (시야 확보)
+  occludeTrees(a, b) {
+    const now = new Set(), dir = b.clone().sub(a), len = dir.length();
+    if (len > 0.01) {
+      dir.divideScalar(len);
+      const cells = new Set();
+      for (let d = 0; d <= len; d += 6) { const x = a.x + dir.x * d, z = a.z + dir.z * d; for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) cells.add((Math.floor(x / 20) + i) * 100003 + (Math.floor(z / 20) + j)); }
+      const P = new THREE.Vector3();
+      for (const k of cells) {
+        const list = this.treeGrid.get(k); if (!list) continue;
+        for (const t of list) {
+          if (t.dead || !t.ref || t.ref.kind !== 'tree') continue;
+          const s = t.ref.set.data[t.ref.idx]?.s || 1;
+          for (let d = 0.8; d < len - 0.5; d += 0.7) { // 선을 따라가며 나무(줄기·잎) 안에 들어가는지
+            P.copy(a).addScaledVector(dir, d);
+            const hy = P.y - t.y; if (hy < 0 || hy > 8 * s) continue;
+            const rr = hy < 2.2 * s ? 0.7 * s : 2.8 * s;
+            if ((P.x - t.x) ** 2 + (P.z - t.z) ** 2 < rr * rr) { now.add(t); break; }
+          }
+        }
+      }
+    }
+    for (const t of this._occ || []) if (!now.has(t)) t.ref.set.show(t.ref.idx);
+    for (const t of now) t.ref.set.hide(t.ref.idx);
+    this._occ = now;
   }
   // 카메라용: 이 점이 루프 트랙 안(두께 속)인지
   loopSolidAt(p) {
@@ -1498,7 +1531,8 @@ export class World {
       const a = this.rand() * Math.PI * 2, r = 60 + this.rand() * (RR - 80);
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       zoneWeights(x, z); if (Math.max(ZW[0], ZW[1], ZW[2], ZW[3]) > 0.4) continue;
-      this.enemySpots.push({ pos: new THREE.Vector3(x, 0, z), type: this.rand() < 0.25 ? 'wasp' : 'beetle' });
+      const rt = this.rand();
+      this.enemySpots.push({ pos: new THREE.Vector3(x, 0, z), type: rt < 0.2 ? 'wasp' : rt < 0.42 ? 'gunner' : 'beetle' });
     }
     this._mountains();
   }

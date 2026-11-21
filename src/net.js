@@ -38,6 +38,11 @@ export class Net {
   get Peer() { return window.Peer || window.peerjs?.Peer; }
   get active() { return !!this.peer && !this.peer.destroyed; }
   get inRoom() { return !!this.code && (this.host ? this.active : this.conns.size > 0); }
+  get shared() { return this.inRoom && this.started; } // 몬스터·링·보스를 같이 씀
+  // 몬스터·링·보스 같은 게임 소식 보내기 (방장을 거쳐 모두에게)
+  sendGame(m) { if (!this.conns.size) return; if (this.host) this._broadcast(m); else this._sendHost(m); }
+  // 방장 쪽 몬스터가 쫓아갈 친구 위치
+  proxies() { return [...this.remotes.values()].filter((r) => r.view.root.visible && !r.st.h).map((r) => ({ pos: r.pos, alive: true })); }
   get count() { return Math.max(1, this.members.length || 1 + this.remotes.size); }
   _set(status) { this.status = status; this.h.onChange?.(); }
   _changed() { this.h.onChange?.(); }
@@ -196,6 +201,10 @@ export class Net {
         if (this.host) this._roster();
         return;
       case 'bye': this._remove(m.id); this._changed(); return;
+      case 'eh': case 'rg': case 'bh': case 'ep': case 'bp':
+        if (this.host && m.t !== 'ep' && m.t !== 'bp') this._broadcast(m, conn.peer);
+        this.h.onGame?.(m);
+        return;
       case 's':
         if (typeof m.id !== 'string') return;
         if (this.host) this._broadcast(m, conn.peer); // 방장이 다른 친구들에게 전달
@@ -244,6 +253,22 @@ export class Net {
       this._broadcast({ t: 's', id: this.peer.id, k: pl.kind, n: this.myNum, g: g.stageIdx,
         p: [+pl.pos.x.toFixed(2), +pl.pos.y.toFixed(2), +pl.pos.z.toFixed(2)], y: +pl.yaw.toFixed(3),
         q: { s: +hs.toFixed(1), gr: pl.grounded ? 1 : 0, b: (pl.ball || pl.state === 'charge') && !pl.superFlight ? 1 : 0, ps: pl.pose(), su: pl.superOn ? 1 : 0, h: pl.hidden || !pl.alive ? 1 : 0, c: pl.state === 'charge' ? 1 : 0 } });
+    }
+    // 방장: 몬스터·보스 위치를 친구들에게 (초당 10번)
+    if (this.host && this.shared && this.conns.size) {
+      this.epT = (this.epT || 0) - dt;
+      if (this.epT <= 0) {
+        this.epT = 0.1;
+        const who = [pl.pos, ...[...this.remotes.values()].map((r) => r.pos)], a = [];
+        for (const e of g.enemies.list) {
+          if (!e.alive || e.dying > 0 || e.T.static || e.asleep) continue;
+          if (!who.some((p) => Math.abs(p.x - e.pos.x) < 170 && Math.abs(p.z - e.pos.z) < 170)) continue;
+          a.push(e.idx, +e.pos.x.toFixed(1), +e.pos.y.toFixed(1), +e.pos.z.toFixed(1), +e.yaw.toFixed(2));
+        }
+        if (a.length) this._broadcast({ t: 'ep', a });
+        const b = g.boss;
+        if (b && b.alive && b.spawned) this._broadcast({ t: 'bp', p: [+b.pos.x.toFixed(2), +b.pos.y.toFixed(2), +b.pos.z.toFixed(2)], y: +b.yaw.toFixed(3), s: b.state });
+      }
     }
     // 친구 캐릭터 부드럽게 움직이기
     const now = performance.now();
