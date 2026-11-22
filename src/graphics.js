@@ -4,7 +4,7 @@ import { EffectComposer } from '../vendor/addons/postprocessing/EffectComposer.j
 import { RenderPass } from '../vendor/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from '../vendor/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from '../vendor/addons/postprocessing/OutputPass.js';
-import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES, snowAmount, vnoise } from './world.js';
+import { terrainHeight, zoneWeights, roadDist, ZONES, ROAD, SITES, snowAmount, vnoise, skyEdgeAt } from './world.js';
 import { CFG } from './config.js';
 
 const NOISE_GLSL = `
@@ -272,7 +272,7 @@ export class Graphics {
     for (let k = 0; k < 40000 && i < N; k++) {
       const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 2500, x = Math.cos(a) * r, z = Math.sin(a) * r;
       const far = r > CFG.sky.edge + 80;
-      if (far) { if (Math.random() < 0.85) continue; this.lowClouds.set(i++, x, -260 - Math.random() * 500, z, 90 + Math.random() * 120, 1, 1, 1, 0.8); continue; } // 끝 너머: 저 아래 흩어진 구름 (그림일 뿐)
+      if (far) { if (Math.random() < 0.993) continue; this.lowClouds.set(i++, x, -260 - Math.random() * 500, z, 90 + Math.random() * 120, 1, 1, 1, 0.8); continue; } // 끝 너머: 저 아래 흩어진 구름 (그림일 뿐)
       const h = terrainHeight(x, z); if (h > -20 || h < -100) continue;
       this.lowClouds.set(i++, x, Y + 2 + Math.random() * 5, z, 18 + Math.random() * 22, 1, 1, 1, 0.95);
     }
@@ -280,7 +280,7 @@ export class Graphics {
     this.lowClouds.flush();
     this.scene.add(this.lowClouds.mesh);
     // 구름 덩어리 가장자리를 몽글몽글하게: 빈틈 바로 옆에 구름 뭉치
-    const M = this.mobile ? 1000 : 2400;
+    const M = this.mobile ? 1000 + 3500 : 2400 + 5200;
     this.rimPuffs = new Billboards(M, cloudTexture(), { fog: true, shade: true });
     this.rimPuffs.mat.uniforms.shadeCol.value.set(0xd8e4f4);
     let j = 0;
@@ -293,8 +293,22 @@ export class Graphics {
       this.rimPuffs.set(j++, x + o[0] * 0.5, h - s * 0.25, z + o[1] * 0.5, s, 1, 1, 1, 1);
       if (j < M && Math.random() < 0.6) this.rimPuffs.set(j++, x + o[0] * 0.9, h - s * 0.9, z + o[1] * 0.9, s * 1.2, 1, 1, 1, 1);
     }
+    // 맵 끝: 위 구름 땅의 둥근 가장자리 아래와 아래 구름 바다의 둥근 밑면 (옆에서 보면 하늘에 떠 있는 구름 덩어리)
+    const step = this.mobile ? 16 : 11;
+    for (let a = 0; a < Math.PI * 2 && j < M - 6; a += step / 1700 * 1.25) {
+      const cx = Math.cos(a), cz = Math.sin(a), E = skyEdgeAt(cx * 1700, cz * 1700);
+      const lay = [[E + 2, -4, 26], [E + 5, -16, 34], [E + 4, -30, 40], [E - 4, -44, 42], [E - 18, -52, 36]];
+      for (const [r, y, s] of lay) { const w = (Math.random() - 0.5) * 6; this.rimPuffs.set(j++, cx * (r + w), y + (Math.random() - 0.5) * 6, cz * (r + w), s * (0.8 + Math.random() * 0.4), 1, 1, 1, 1); }
+    }
     for (; j < M; j++) this.rimPuffs.set(j, 0, -999, 0, 0, 0, 0, 0, 0);
     this.rimPuffs.flush();
+    // 구름 땅 전체의 밑면: 아래에서 올려다보면 빈틈없는 구름 덩어리 바닥 (그 아래는 뻥 뚫린 하늘)
+    const SEG = 360, pos = [0, -45, 0], idx = [];
+    for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, R = skyEdgeAt(Math.cos(a) * 1700, Math.sin(a) * 1700) - 6; pos.push(Math.cos(a) * R, -45, Math.sin(a) * R); }
+    for (let i = 0; i < SEG; i++) idx.push(0, 1 + i, 1 + (i + 1) % SEG);
+    const ug = new THREE.BufferGeometry(); ug.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); ug.setIndex(idx); ug.computeVertexNormals();
+    this.underside = new THREE.Mesh(ug, new THREE.MeshLambertMaterial({ color: 0xeef4fc, emissive: 0x5a6a80, side: THREE.DoubleSide }));
+    this.scene.add(this.underside);
     this.scene.add(this.rimPuffs.mesh);
   }
 

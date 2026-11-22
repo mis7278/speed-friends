@@ -263,7 +263,11 @@ export function terrainHeight(x, z) {
     if (ds > E - 160) h = mix(h, -22, smooth(E - 160, E + 50, ds));
     return h;
   }
-  if (md === 'sky') { const E = skyEdgeR(x, z); if (ds > E - 60) h = mix(h, -900, smooth(E - 60, E, ds)); return h; } // 땅 끝 너머: 아무것도 없는 하늘 (끝없이 떨어짐)
+  if (md === 'sky') { // 구름 땅의 끝: 둥글게 말려 내려가는 가장자리 (그 아래는 아무것도 없는 하늘)
+    const E = skyEdgeR(x, z), R = 45, d = ds - (E - R);
+    if (d > 0) h = d >= R ? -900 : h - (R - Math.sqrt(R * R - d * d));
+    return h;
+  }
   if (md === 'ship') { // 우주선 갑판: 높낮이를 낮추고 물 없음, 외벽 너머는 우주
     if (ds > CFG.world.barrierR + 3) return -600;
     return Math.max(0.5, 3 + (h - 3) * 0.4);
@@ -453,6 +457,11 @@ function starPath(g, cx, cy, ro, ri) {
 }
 
 // ---------------- 지형 스트리밍: 가까운 땅은 촘촘하게, 멀리는 단순하게 ----------------
+// 하늘 도시: 높이 -44m 아래(구름 바다 바로 아래)의 땅은 그리지 않음 → 그 아래는 뻥 뚫린 하늘
+function clipBelow(sh) {
+  sh.vertexShader = 'varying float vWy;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWy = (modelMatrix * vec4(transformed, 1.0)).y;');
+  sh.fragmentShader = 'varying float vWy;\n' + sh.fragmentShader.replace('void main() {', 'void main() {\n if (vWy < -44.0) discard;');
+}
 class TerrainStreamer {
   constructor(world, mobile) {
     this.w = world; this.CH = 256; this.half = CFG.world.terrainHalf;
@@ -467,6 +476,7 @@ class TerrainStreamer {
     const mat = this.w.matLit.clone();
     const cover = this.cover, center = this.center;
     mat.onBeforeCompile = (sh) => {
+      if (this.w.mode === 'sky') clipBelow(sh);
       sh.uniforms.uCover = cover; sh.uniforms.uC = center;
       sh.vertexShader = 'varying vec2 vWxz;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWxz = (modelMatrix * vec4(position, 1.0)).xz;');
       sh.fragmentShader = 'uniform float uCover; uniform vec2 uC; varying vec2 vWxz;\n' + sh.fragmentShader.replace('void main() {', 'void main() {\n if (length(vWxz - uC) < uCover) discard;');
@@ -599,6 +609,7 @@ export class World {
     this.streamT = 0; this.lastRebuild = new THREE.Vector2(1e9, 1e9);
     this.matLit = new THREE.MeshLambertMaterial({ vertexColors: true });
     this.matGlow = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
+    if (themeName === 'sky') this.matLit.onBeforeCompile = (sh) => clipBelow(sh); // 하늘 도시: 구름 아래(죽는 영역)는 아무것도 그리지 않음 = 뻥 뚫린 하늘
     if (themeName === 'space') this._buildSpace(); else this._build();
   }
 
@@ -629,7 +640,7 @@ export class World {
     if (this.mode === 'lava') { if (h < CFG.lava.level) { h = CFG.lava.level - 0.3; surface = 'lava'; } }
     else if (this.mode === 'space') { h = 0; surface = 'space'; }
     else if (this.mode === 'ship' && h < -100) { h = -1e4; surface = 'void'; }
-    else if (this.mode === 'sky') { if (h < -20) { if (h > -100 && Math.hypot(x, z) < skyEdgeR(x, z)) { h = CFG.sky.cloudY; surface = 'cloud'; } else { h = -1e4; surface = 'void'; } } }
+    else if (this.mode === 'sky') { if (h < -20) { if (h > -100 && Math.hypot(x, z) < skyEdgeR(x, z) - 50) { h = CFG.sky.cloudY; surface = 'cloud'; } else { h = -1e4; surface = 'void'; } } }
     else if (this.T.frozen) { if (h < 0) { h = 0; surface = 'ice'; } }
     else if (h < CFG.water.swimDepth) { if (!deep) h = CFG.water.swimDepth; surface = 'water'; }
     else if (h < 0) surface = 'shallow';
@@ -722,7 +733,7 @@ export class World {
     return false;
   }
   isWater(x, z) { return !this.T.frozen && !this.T.lava && !this.T.skyLand && !this.T.space && terrainHeight(x, z) < 0; }
-  beyondEdge(x, z) { return this.mode === 'sky' && Math.hypot(x, z) > skyEdgeR(x, z) - 64; }
+  beyondEdge(x, z) { return this.mode === 'sky' && Math.hypot(x, z) > skyEdgeR(x, z) - 8; }
   lavaAt(x, z) { return this.mode === 'lava' && terrainHeight(x, z) < CFG.lava.level; }
 
   collide(pos, radius, height, vel, oldY = pos.y) {
