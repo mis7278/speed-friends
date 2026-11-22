@@ -200,7 +200,7 @@ export class Player {
     this.auraWasReady = ready;
     const W = this.game.world;
     if (this.alive && W.mode === 'lava' && this.state !== 'loop' && this.pos.y < CFG.lava.level + 0.25 && W.lavaAt(this.pos.x, this.pos.z)) this.hazardDeath('lava');
-    else if (this.alive && W.mode === 'sky' && this.pos.y < CFG.sky.cloudY - 3) this.hazardDeath('void');
+    else if (this.alive && W.mode === 'sky' && (this.pos.y < CFG.sky.cloudY - 3 || (this.pos.y < -4 && W.beyondEdge(this.pos.x, this.pos.z)))) this.hazardDeath('void'); // 하늘 끝 너머로 떨어지기 시작
     else if (this.alive && W.mode === 'ship' && this.pos.y < -25) this.hazardDeath('void'); // 우주선 밖 = 우주 → 지구로 떨어짐
     else if (this.pos.y < -60 && W.mode !== 'sky' && W.mode !== 'space') this.die();
     if (W.hullHitA != null) { if (this.superOn) this.game.breakHull?.(W.hullHitA, this.pos.y); W.hullHitA = null; } // 슈퍼 상태로 우주선 외벽에 부딪히면 구멍

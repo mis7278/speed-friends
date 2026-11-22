@@ -271,13 +271,31 @@ export class Graphics {
     let i = 0;
     for (let k = 0; k < 40000 && i < N; k++) {
       const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * 2500, x = Math.cos(a) * r, z = Math.sin(a) * r;
-      if (terrainHeight(x, z) > -20) continue;
-      const far = r > CFG.sky.edge;
-      this.lowClouds.set(i++, x, Y + 2 + Math.random() * (far ? 14 : 5), z, far ? 70 + Math.random() * 60 : 18 + Math.random() * 22, 1, 1, 1, 0.95);
+      const far = r > CFG.sky.edge + 80;
+      if (far) { if (Math.random() < 0.85) continue; this.lowClouds.set(i++, x, -260 - Math.random() * 500, z, 90 + Math.random() * 120, 1, 1, 1, 0.8); continue; } // 끝 너머: 저 아래 흩어진 구름 (그림일 뿐)
+      const h = terrainHeight(x, z); if (h > -20 || h < -100) continue;
+      this.lowClouds.set(i++, x, Y + 2 + Math.random() * 5, z, 18 + Math.random() * 22, 1, 1, 1, 0.95);
     }
     for (; i < N; i++) this.lowClouds.set(i, 0, -999, 0, 0, 0, 0, 0, 0);
     this.lowClouds.flush();
     this.scene.add(this.lowClouds.mesh);
+    // 구름 덩어리 가장자리를 몽글몽글하게: 빈틈 바로 옆에 구름 뭉치
+    const M = this.mobile ? 1000 : 2400;
+    this.rimPuffs = new Billboards(M, cloudTexture(), { fog: true, shade: true });
+    this.rimPuffs.mat.uniforms.shadeCol.value.set(0xd8e4f4);
+    let j = 0;
+    const off = [[7, 0], [-7, 0], [0, 7], [0, -7]];
+    for (let k = 0; k < (this.mobile ? 26000 : 40000) && j < M; k++) {
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (CFG.sky.edge - 70), x = Math.cos(a) * r, z = Math.sin(a) * r;
+      const h = terrainHeight(x, z); if (h < -4) continue;
+      const o = off.find(([dx, dz]) => terrainHeight(x + dx, z + dz) < -20); if (!o) continue;
+      const s = 11 + Math.random() * 11;
+      this.rimPuffs.set(j++, x + o[0] * 0.5, h - s * 0.25, z + o[1] * 0.5, s, 1, 1, 1, 1);
+      if (j < M && Math.random() < 0.6) this.rimPuffs.set(j++, x + o[0] * 0.9, h - s * 0.9, z + o[1] * 0.9, s * 1.2, 1, 1, 1, 1);
+    }
+    for (; j < M; j++) this.rimPuffs.set(j, 0, -999, 0, 0, 0, 0, 0, 0);
+    this.rimPuffs.flush();
+    this.scene.add(this.rimPuffs.mesh);
   }
 
   // 풀: 플레이어 주변에서 계속 돌려쓰는 풀밭 (지형 높이를 그림으로 만들어서 읽음)

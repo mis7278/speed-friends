@@ -750,10 +750,14 @@ function boot() {
   };
   game.onVoidFall = (keep, lost) => {
     const space = W.mode === 'ship';
-    pl._cv = pl.vel.clone(); pl._cv.y = Math.min(pl._cv.y, -10); pl._cv.x *= 0.4; pl._cv.z *= 0.4;
-    playCine([{ from: () => ({ pos: pl.pos.clone().add(space ? V(6, 22, 6) : V(4, 16, 4)), look: pl.pos.clone().add(space ? V(0, -40, 0) : V(0, 0, 0)) }), dur: 2.6, hold: 0.3, who: me(), text: space ? '으아아아악~~! 지구로 떨어진다~~!' : '아아아아악!!!!',
+    pl._cv = pl.vel.clone(); pl._cv.y = Math.min(pl._cv.y, -6); pl._cv.x *= 0.5; pl._cv.z *= 0.5;
+    // 카메라는 떨어지기 시작한 곳(가장자리 위)에 머물고, 캐릭터만 저 아래로 점점 작아지며 떨어짐
+    const out = V(pl.pos.x, 0, pl.pos.z).normalize();
+    const camAt = pl.pos.clone().addScaledVector(out, -7).add(V(0, space ? 10 : 7, 0));
+    const y0 = pl.pos.y;
+    playCine([{ from: () => ({ pos: camAt.clone().setY(camAt.y + (pl.pos.y - y0) * 0.45), look: pl.pos.clone() }), dur: 3.4, hold: 0.4, who: me(), text: space ? '으아아아악~~! 지구로 떨어진다~~!' : '아아아아악~~~!!!!',
       enter: () => SFX.hurt(),
-      tick: (dt) => { pl._cv.y = Math.max(-45, pl._cv.y - 40 * dt); pl.pos.addScaledVector(pl._cv, dt); pl.updateView(dt); if (Math.random() < 0.4) game.fx.burst(pl.pos.clone().add(V(0, 2, 0)), 0xffffff, 2, 2); } }],
+      tick: (dt) => { pl._cv.y = Math.max(-80, pl._cv.y - 40 * dt); pl.pos.addScaledVector(pl._cv, dt); pl.state = 'air'; pl.updateView(dt); pl.view.root.rotation.x += dt * 4; if (Math.random() < 0.6) game.fx.burst(pl.pos.clone().add(V(0, 1.5, 0)), 0xffffff, 2, 3); } }],
     () => { pl._cv = null; pl.die(keep); if (lost) game.hud.toast(`☁️ 구름 아래로 떨어졌어요... (링 -${lost})`); });
   };
 

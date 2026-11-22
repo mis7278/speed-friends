@@ -66,13 +66,13 @@ export const THEMES = {
     waterDeep: 0xff4a10, waterShallow: 0xffc040, swampWater: 0xff6a20, frozen: false, grass: false, snowyTrees: false, lava: true,
     villainMetal: 0x4a4a52,
   },
-  sky: { // 4스테이지: 하늘 위 기계 철판 땅 (구멍 아래는 푹신한 구름, 끝 너머는 낭떠러지)
-    grassA: 0x9aa6b4, grassB: 0x7d8a99, grassDry: 0xb0b8c4, dirt: 0x6a7480, road: 0xd8dee6, roadLine: 0x4fd8ff,
+  sky: { // 4스테이지: 하늘에 떠 있는 구름 덩어리들이 이어진 땅 (사이사이 빈틈 아래는 커다란 구름 바다, 끝 너머는 뻥 뚫린 하늘)
+    grassA: 0xfbfdff, grassB: 0xe2ecf8, grassDry: 0xf0f4fb, dirt: 0xc8d6ea, road: 0xfff3c8, roadLine: 0xffd86a,
     rock: 0x6a7480, cliffA: 0xc89a3a, cliffB: 0xe8c060, metal: 0x5d646e, metalLine: 0x3a4048, rust: 0x7a8aa0,
     swampA: 0x6a5a9a, swampB: 0x8a6ac8, sand: 0xc8d0da, underwater: 0xffffff, snow: 0xffffff, mountain: 0x8a94a3,
     leaf: [0x4fd8ff, 0x7fe8ff, 0x3ac0f0, 0x9ff0ff], pine: [0x5a6470, 0x6a7480], caps: [0x4fd8ff, 0xffd23a, 0xff6ab0],
-    skyTop: 0x2a6ae0, skyHorizon: 0xd8ecff, skyBottom: 0xf4f8ff, sun: 0xfff6e0, fog: 0xe4f0ff, fogDensity: 0.00045,
-    hemiSky: 0xeaf4ff, hemiGround: 0xc8d4e4, sunInt: 2.2, hemiInt: 1.2,
+    skyTop: 0x2a6ae0, skyHorizon: 0xcfe6ff, skyBottom: 0x8cc0f0, sun: 0xfff6e0, fog: 0xcfe6ff, fogDensity: 0.00035,
+    hemiSky: 0xeaf4ff, hemiGround: 0xb8cce4, sunInt: 2.0, hemiInt: 1.25,
     waterDeep: 0xffffff, waterShallow: 0xffffff, swampWater: 0xffffff, frozen: false, grass: false, snowyTrees: false, skyLand: true,
     villainMetal: 0x50565f,
   },
@@ -237,8 +237,13 @@ export function terrainHeight(x, z) {
   } else if (md === 'lava') { // 용암이 흐르는 좁은 골짜기 (점프로 넘어갈 수 있음)
     const rv = Math.abs(vnoise(x * 0.0055 + 13, z * 0.0055 - 9) - 0.5);
     if (rv < 0.03) h = mix(h, -3, (1 - smooth(0.012, 0.03, rv)) * smooth(90, 160, Math.hypot(x, z)));
-  } else if (md === 'sky') { // 물이던 곳(호수·연못·늪)과 구멍 → 아래로 구름이 보이는 구멍
-    if (h < 0.3) h = CFG.sky.cloudY;
+  } else if (md === 'sky') { // 구름 덩어리 땅: 낮고 몽글몽글, 덩어리 사이사이 빈틈 → 아래 구름 바다로 떨어짐
+    const wasWater = h < 0.3;
+    h = 3 + (h - 3) * 0.35 + (fbm(x * 0.025 + 3, z * 0.025, 2) - 0.5) * 3.5;
+    const m = fbm(x * 0.0042 + 17, z * 0.0042 - 3, 3);
+    const nearEdge = smooth(skyEdgeR(x, z) - 170, skyEdgeR(x, z) - 110, Math.hypot(x, z)); // 끝 근처는 빈틈 없이 (깔끔한 낭떠러지)
+    const gap = (wasWater ? 1 : 1 - smooth(0.398, 0.412, m)) * (1 - nearEdge);
+    if (gap > 0) h = mix(h, CFG.sky.cloudY, gap);
     for (const H of SKY_HOLES) {
       const dx = x - H.x, dz = z - H.z; if (dx * dx + dz * dz > H.r * H.r) continue;
       h = mix(CFG.sky.cloudY, h, smooth(H.r - 2.5, H.r, Math.sqrt(dx * dx + dz * dz)));
@@ -258,7 +263,7 @@ export function terrainHeight(x, z) {
     if (ds > E - 160) h = mix(h, -22, smooth(E - 160, E + 50, ds));
     return h;
   }
-  if (md === 'sky') { if (ds > skyEdgeR(x, z)) h = CFG.sky.cloudY; return h; } // 땅 끝 너머: 구름 바다 (밟을 수 없음)
+  if (md === 'sky') { const E = skyEdgeR(x, z); if (ds > E - 60) h = mix(h, -900, smooth(E - 60, E, ds)); return h; } // 땅 끝 너머: 아무것도 없는 하늘 (끝없이 떨어짐)
   if (md === 'ship') { // 우주선 갑판: 높낮이를 낮추고 물 없음, 외벽 너머는 우주
     if (ds > CFG.world.barrierR + 3) return -600;
     return Math.max(0.5, 3 + (h - 3) * 0.4);
@@ -624,7 +629,7 @@ export class World {
     if (this.mode === 'lava') { if (h < CFG.lava.level) { h = CFG.lava.level - 0.3; surface = 'lava'; } }
     else if (this.mode === 'space') { h = 0; surface = 'space'; }
     else if (this.mode === 'ship' && h < -100) { h = -1e4; surface = 'void'; }
-    else if (this.mode === 'sky') { if (h < -20) { if (Math.hypot(x, z) < skyEdgeR(x, z)) { h = CFG.sky.cloudY; surface = 'cloud'; } else { h = -1e4; surface = 'void'; } } }
+    else if (this.mode === 'sky') { if (h < -20) { if (h > -100 && Math.hypot(x, z) < skyEdgeR(x, z)) { h = CFG.sky.cloudY; surface = 'cloud'; } else { h = -1e4; surface = 'void'; } } }
     else if (this.T.frozen) { if (h < 0) { h = 0; surface = 'ice'; } }
     else if (h < CFG.water.swimDepth) { if (!deep) h = CFG.water.swimDepth; surface = 'water'; }
     else if (h < 0) surface = 'shallow';
@@ -717,6 +722,7 @@ export class World {
     return false;
   }
   isWater(x, z) { return !this.T.frozen && !this.T.lava && !this.T.skyLand && !this.T.space && terrainHeight(x, z) < 0; }
+  beyondEdge(x, z) { return this.mode === 'sky' && Math.hypot(x, z) > skyEdgeR(x, z) - 64; }
   lavaAt(x, z) { return this.mode === 'lava' && terrainHeight(x, z) < CFG.lava.level; }
 
   collide(pos, radius, height, vel, oldY = pos.y) {
@@ -937,9 +943,10 @@ export class World {
       if (h < 1.4) out.lerp(_c.set(0x6a2a16), smooth(1.4, 0.1, h) * 0.6);   // 용암 가까운 땅은 붉게 달아오름
       const ash = vnoise(x * 0.03 + 5, z * 0.03); if (ash > 0.7) out.lerp(_c.set(0x8a8480), (ash - 0.7) * 2); // 화산재
     } else if (this.mode === 'sky') {
-      if (h < -20) return out.set(0xffffff).lerp(_c.set(0xd4e2f4), vnoise(x * 0.03, z * 0.03) * 0.7); // 구멍 아래 구름
-      const gx = ((x % 16) + 16) % 16, gz = ((z % 16) + 16) % 16;
-      if (gx < 1.5 || gz < 1.5) out.multiplyScalar(0.8);                // 철판 이음새
+      if (h < -100) return out.set(this.T.skyBottom);                                              // 끝 너머: 하늘
+      if (h < -20) return out.set(0xe4eefa).lerp(_c.set(0xbcd2ee), vnoise(x * 0.03, z * 0.03) * 0.8); // 아래 구름 바다 (살짝 푸르게: 위 구름과 구분)
+      if (h < 1) out.lerp(_c.set(0xc4d4ea), smooth(1, -15, h) * 0.6);                              // 구름 덩어리 옆면은 살짝 그늘
+      out.lerp(_c.set(0xffffff), vnoise(x * 0.11, z * 0.11) * 0.35);                                // 몽글몽글
     }
     return out;
   }
@@ -3156,7 +3163,7 @@ export class World {
     }
     const N = 300;
     for (let i = 0; i < N; i++) {
-      const a = i / N * Math.PI * 2, x0 = Math.cos(a), z0 = Math.sin(a), R = skyEdgeR(x0 * 1700, z0 * 1700) - 7;
+      const a = i / N * Math.PI * 2, x0 = Math.cos(a), z0 = Math.sin(a), R = skyEdgeR(x0 * 1700, z0 * 1700) - 72;
       const x = x0 * R, z = z0 * R, y = terrainHeight(x, z);
       if (y < 0.5) continue;
       this.put(BASE.box, i % 2 ? 0xffc233 : 0x2c3036, x, y + 0.6, z, 1.2, 1.2, 1.2, -a);
