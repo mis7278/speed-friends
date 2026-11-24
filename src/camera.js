@@ -71,15 +71,17 @@ export class CameraRig {
       if (indoor) dist = Math.min(dist, 7.5);
       const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
       want.set(this.target.x - Math.sin(this.yaw) * cp * dist, this.target.y + sp * dist, this.target.z - Math.cos(this.yaw) * cp * dist);
-      // 벽·건물에 가리면 카메라를 앞으로 당김 (반투명해지는 벽은 통과)
+      // 무엇이든 캐릭터를 가리면 (벽·건물·땅·루프·구름 덩어리) 카메라를 캐릭터 쪽으로 당겨서 캐릭터가 항상 보이게
       const dir = want.clone().sub(this.target), len = dir.length();
       if (len > 0.01) {
         dir.divideScalar(len);
         const p = new THREE.Vector3();
-        for (let d = 1.2; d < len; d += 0.5) {
+        let hitD = Infinity;
+        for (let d = 0.9; d < len; d += 0.4) {
           p.copy(this.target).addScaledVector(dir, d);
-          if (world.solidAt(p, true) || world.loopSolidAt(p)) { want.copy(this.target).addScaledVector(dir, Math.max(1, d - 0.7)); break; }
+          if (world.solidAt(p, true) || world.loopSolidAt(p) || world.cameraBlockedAt(p)) { hitD = d; break; }
         }
+        if (hitD < Infinity) { this.pullD = Math.min(this.pullD ?? hitD, hitD); this.pullD = hitD; want.copy(this.target).addScaledVector(dir, Math.max(0.8, hitD - 0.6)); }
       }
       cam.position.copy(want);
       const g = world.groundAt(cam.position.x, cam.position.z, cam.position.y + 50) + 0.8;

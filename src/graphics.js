@@ -285,7 +285,7 @@ export class Graphics {
     this.rimPuffs.mat.uniforms.shadeCol.value.set(0xd8e4f4);
     let j = 0;
     const off = [[7, 0], [-7, 0], [0, 7], [0, -7]];
-    for (let k = 0; k < (this.mobile ? 40000 : 70000) && j < M - 5200; k++) {
+    for (let k = 0; k < 0 && j < M - 5200; k++) { // (구름 공이 대신함)
       const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (CFG.sky.edge - 70), x = Math.cos(a) * r, z = Math.sin(a) * r;
       const h = terrainHeight(x, z); if (h < -4) continue;
       const o = off.find(([dx, dz]) => terrainHeight(x + dx, z + dz) < -20); if (!o) continue;
@@ -364,8 +364,8 @@ export class Graphics {
     }
     for (; q < PB; q++) this.bellyPuffs.set(q, 0, -999, 0, 0, 0, 0, 0, 0);
     this.bellyPuffs.flush();
-    this.scene.add(this.bellyPuffs.mesh);
-    this.scene.add(this.rimPuffs.mesh);
+    // (구름 공이 대신함)
+    // (구름 공이 대신함)
   }
 
   // 풀: 플레이어 주변에서 계속 돌려쓰는 풀밭 (지형 높이를 그림으로 만들어서 읽음)

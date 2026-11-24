@@ -1353,7 +1353,7 @@ export class Player {
     // 실루엣 따라가기
     const S = this.sil;
     for (let i = 0; i < S.src.length; i++) { const a = S.src[i], b = S.dst[i]; b.position.copy(a.position); b.quaternion.copy(a.quaternion); b.scale.copy(a.scale); b.visible = a.visible; }
-    S.root.visible = v.root.visible && this.alive && !this.hidden && !this.firstPerson;
+    S.root.visible = false; // 가려질 때 그림자로 보여 주지 않음 → 카메라가 캐릭터 쪽으로 다가가서 직접 보여 줌
     const g = this.game.world.groundAt(this.pos.x, this.pos.z, this.pos.y + 0.1);
     const h = this.pos.y - g;
     this.shadow.visible = this.alive && this.state !== 'loop' && this.state !== 'swim' && h > 0.5;

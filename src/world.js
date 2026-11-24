@@ -748,6 +748,72 @@ export class World {
   }
   isWater(x, z) { return !this.T.frozen && !this.T.lava && !this.T.skyLand && !this.T.space && terrainHeight(x, z) < 0; }
   beyondEdge(x, z) { return this.mode === 'sky' && Math.hypot(x, z) > skyEdgeR(x, z) - 8; }
+  // 카메라용: 이 점이 땅 속이나 구름 공 속인지 (가리면 카메라를 당김)
+  cameraBlockedAt(p) {
+    const h = terrainHeight(p.x, p.z);
+    if (this.mode === 'sky') { if (h > -10 && p.y < h - 0.4 && p.y > -7) return true; }
+    else if (p.y < h - 0.4) return true;
+    if (this.ballGrid) {
+      const list = this.ballGrid.get(Math.floor(p.x / 40) * 100003 + Math.floor(p.z / 40));
+      if (list) for (const b of list) { const dx = p.x - b.x, dy = p.y - b.y, dz = p.z - b.z; if (dx * dx + dy * dy + dz * dz < b.r * b.r * 0.8) return true; }
+    }
+    return false;
+  }
+  // 하늘 도시: 구름 땅 가장자리를 크고 동그란 구름 공으로 감쌈 → 위·옆·아래가 동글동글한 뭉게구름 덩어리
+  _cloudBalls() {
+    const mob = this.q.mobile, S = mob ? 19 : 12, R = 1700, balls = [], rnd = mulberry32(31337);
+    const NB8 = [1, 0, -1, 0, 0, 1, 0, -1, 1, 1, -1, 1, 1, -1, -1, -1];
+    const N = Math.floor(R * 2 / S) + 1, HG = new Float32Array(N * N);   // 높이는 칸마다 한 번만 계산
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) HG[j * N + i] = terrainHeight(-R + i * S, -R + j * S);
+    const gapAt = (i, j) => i < 0 || j < 0 || i >= N || j >= N ? false : HG[j * N + i] < -20;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const h = HG[j * N + i]; if (h < -10) continue;
+      const x = -R + i * S, z = -R + j * S;
+      let nx = 0, nz = 0;
+      for (let q = 0; q < 16; q += 2) { const di = NB8[q], dj = NB8[q + 1]; if (gapAt(i + di, j + dj)) { nx += di; nz += dj; } }
+      const nl = Math.hypot(nx, nz); if (nl < 0.01) continue;           // 가장자리만
+      nx /= nl; nz /= nl;
+      const px = x + (rnd() - 0.5) * S * 0.6, pz = z + (rnd() - 0.5) * S * 0.6, top = h;
+      const r1 = (mob ? 8 : 6.5) + rnd() * 7;                            // 위·옆 혹 (가장자리 위로 살짝 솟음)
+      balls.push({ x: px + nx * r1 * 0.35, y: top - r1 * 0.72, z: pz + nz * r1 * 0.35, r: r1 });
+      const r2 = (mob ? 9 : 7.5) + rnd() * 6;                            // 옆으로 불룩한 혹
+      balls.push({ x: px + nx * r2 * 0.45, y: -4 - r2 * 0.15, z: pz + nz * r2 * 0.45, r: r2 });
+      if (rnd() < (mob ? 0.55 : 0.75)) { const r3 = (mob ? 9 : 7.5) + rnd() * 7; balls.push({ x: px - nx * r3 * 0.4, y: -8 - r3 * 0.3, z: pz - nz * r3 * 0.4, r: r3 }); } // 아래로 처진 혹
+    }
+    // 맵 끝 둘레도 같은 혹으로
+    for (let a = 0; a < Math.PI * 2; a += S / 1690) {
+      const cx = Math.cos(a), cz = Math.sin(a), E = skyEdgeR(cx * 1700, cz * 1700), r1 = 8 + rnd() * 8, r2 = 9 + rnd() * 8;
+      balls.push({ x: cx * (E - 4), y: -3 - r1 * 0.3, z: cz * (E - 4), r: r1 });
+      balls.push({ x: cx * (E - 14), y: -12 - r2 * 0.3, z: cz * (E - 14), r: r2 });
+    }
+    // 칸별로 나눠서 (가까운 칸만 그림)
+    const cells = new Map(), C = 320;
+    this.ballGrid = new Map();
+    for (const b of balls) {
+      const k = Math.floor(b.x / C) + ',' + Math.floor(b.z / C);
+      if (!cells.has(k)) cells.set(k, []); cells.get(k).push(b);
+      const r = b.r;
+      for (let gx = Math.floor((b.x - r) / 40); gx <= Math.floor((b.x + r) / 40); gx++) for (let gz = Math.floor((b.z - r) / 40); gz <= Math.floor((b.z + r) / 40); gz++) { const key = gx * 100003 + gz; if (!this.ballGrid.has(key)) this.ballGrid.set(key, []); this.ballGrid.get(key).push(b); }
+    }
+    const geo = new THREE.SphereGeometry(1, mob ? 11 : 16, mob ? 7 : 11);
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x5c6c84 });
+    const col = new THREE.Color();
+    this.ballCells = [];
+    for (const [k, list] of cells) {
+      const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+      list.forEach((b, i) => {
+        _m.compose(_p.set(b.x, b.y, b.z), _q.identity(), _s.set(b.r, b.r * 0.82, b.r)); mesh.setMatrixAt(i, _m);
+        mesh.setColorAt(i, col.set(0xffffff).lerp(_c.set(0xcddbee), Math.min(1, Math.max(0, (-b.y - 4) / 14)) * 0.8)); // 아래쪽 혹은 살짝 푸른 그늘
+      });
+      mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();
+      const [ix, iz] = k.split(',').map(Number);
+      this.root.add(mesh);
+      this.ballCells.push({ mesh, cx: (ix + 0.5) * C, cz: (iz + 0.5) * C });
+    }
+    this.cloudBallCount = balls.length;
+  }
+
   lavaAt(x, z) { return this.mode === 'lava' && terrainHeight(x, z) < CFG.lava.level; }
 
   collide(pos, radius, height, vel, oldY = pos.y) {
@@ -910,7 +976,7 @@ export class World {
       if (md === 'lava') this._lavaSea(); else if (md === 'sky') this._skyEdge(); else this._hull();
     }
     this._fieldFill();
-    if (md === 'sky') this._holeRims();
+    if (md === 'sky') { this._holeRims(); this._cloudBalls(); }
     this._exitDevice();
     this._tidySpots();
     for (const s of this.treeSets) s.attach(this.root, !this.q.mobile && s.shadow !== false);
@@ -1215,6 +1281,7 @@ export class World {
       const HR = this.q.mobile ? 380 : 520;
       for (const w of this.houses) w.mesh.visible = !w.dead && Math.abs(w.mesh.position.x - focus.x) < HR && Math.abs(w.mesh.position.z - focus.z) < HR;
       for (const c of this.chests) c.group.visible = Math.abs(c.pos.x - focus.x) < 300 && Math.abs(c.pos.z - focus.z) < 300;
+      if (this.ballCells) { const BR = this.q.mobile ? 420 : 720; for (const c of this.ballCells) c.mesh.visible = Math.hypot(c.cx - focus.x, c.cz - focus.z) < BR; }
     }
   }
   // 나무·바위 부수기 (파워형이나 슈퍼일 때)
