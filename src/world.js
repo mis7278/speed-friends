@@ -72,7 +72,7 @@ export const THEMES = {
     swampA: 0x6a5a9a, swampB: 0x8a6ac8, sand: 0xc8d0da, underwater: 0xffffff, snow: 0xffffff, mountain: 0x8a94a3,
     leaf: [0x4fd8ff, 0x7fe8ff, 0x3ac0f0, 0x9ff0ff], pine: [0x5a6470, 0x6a7480], caps: [0x4fd8ff, 0xffd23a, 0xff6ab0],
     skyTop: 0x2a6ae0, skyHorizon: 0xcfe6ff, skyBottom: 0x8cc0f0, sun: 0xfff6e0, fog: 0xcfe6ff, fogDensity: 0.00035,
-    hemiSky: 0xeaf4ff, hemiGround: 0xb8cce4, sunInt: 2.0, hemiInt: 1.25,
+    hemiSky: 0xf2f8ff, hemiGround: 0xd0deef, sunInt: 1.35, hemiInt: 1.75,
     waterDeep: 0xffffff, waterShallow: 0xffffff, swampWater: 0xffffff, frozen: false, grass: false, snowyTrees: false, skyLand: true,
     villainMetal: 0x50565f,
   },
@@ -198,6 +198,14 @@ const skyEdgeR = (x, z) => CFG.sky.edge + (vnoise(x * 0.004 + 31, z * 0.004 - 7)
 const lavaEdgeR = (x, z) => CFG.lava.edge + (vnoise(x * 0.004 + 20, z * 0.004) - 0.5) * 160;
 export function skyEdgeAt(x, z) { return skyEdgeR(x, z); }
 // 하늘 도시 아래 구름 바다: 크고 작은 구름 언덕이 울퉁불퉁 (튕기는 높이도 이 모양 그대로)
+export function skyPuff(x, z) { // 위 구름 땅의 둥근 언덕 (넓고 부드럽게)
+  return Math.pow(smooth(0.3, 0.85, fbm(x * 0.011 + 3, z * 0.011, 3)), 1.3) * 9 + (vnoise(x * 0.028 + 9, z * 0.028) - 0.5) * 1.4;
+}
+// 위 구름 덩어리 안쪽 깊이 (0 = 빈틈 가장자리, 1 = 한가운데): 밑면이 가운데로 갈수록 볼록하게 처짐
+export function skyClumpDepth(x, z) {
+  const m = fbm(x * 0.0042 + 17, z * 0.0042 - 3, 3), r = Math.hypot(x, z), E = skyEdgeR(x, z);
+  return Math.min(smooth(0.41, 0.55, m), 1 - smooth(E - 110, E - 25, r));
+}
 export function seaHeight(x, z) {
   const big = smooth(0.32, 0.78, fbm(x * 0.009 + 5, z * 0.009 - 11, 3));
   return CFG.sky.cloudY + Math.pow(big, 1.4) * 15 + vnoise(x * 0.04 + 3, z * 0.04) * 2.5;
@@ -244,11 +252,10 @@ export function terrainHeight(x, z) {
     if (rv < 0.03) h = mix(h, -3, (1 - smooth(0.012, 0.03, rv)) * smooth(90, 160, Math.hypot(x, z)));
   } else if (md === 'sky') { // 구름 덩어리 땅: 낮고 몽글몽글, 덩어리 사이사이 빈틈 → 아래 구름 바다로 떨어짐
     const wasWater = h < 0.3;
-    const puff = fbm(x * 0.022 + 3, z * 0.022, 2), puff2 = vnoise(x * 0.07 + 9, z * 0.07);
-    h = 3 + (h - 3) * 0.35 + Math.pow(puff, 1.6) * 7 + puff2 * 1.2;      // 뭉게뭉게 솟은 구름 언덕
+    h = 3 + (h - 3) * 0.3 + skyPuff(x, z);                              // 크고 둥근 뭉게구름 언덕
     const m = fbm(x * 0.0042 + 17, z * 0.0042 - 3, 3);
     const nearEdge = smooth(skyEdgeR(x, z) - 170, skyEdgeR(x, z) - 110, Math.hypot(x, z)); // 끝 근처는 빈틈 없이 (깔끔한 낭떠러지)
-    h -= (1 - smooth(0.412, 0.47, m)) * 6 * (1 - nearEdge);               // 빈틈 가까이: 둥글게 말려 내려가는 구름 가장자리
+    h -= Math.pow(1 - smooth(0.405, 0.5, m), 1.6) * 9 * (1 - nearEdge);   // 빈틈 가까이: 둥글게 말려 내려가는 구름 가장자리
     const gap = (wasWater ? 1 : 1 - smooth(0.398, 0.412, m)) * (1 - nearEdge);
     if (gap > 0) h = mix(h, CFG.sky.cloudY, gap);
     for (const H of SKY_HOLES) {
@@ -964,9 +971,7 @@ export class World {
       if (h < -100) return out.set(this.T.skyBottom);                                              // 끝 너머: 하늘
       if (h < -20) return out.set(0xe4eefa).lerp(_c.set(0xbcd2ee), vnoise(x * 0.03, z * 0.03) * 0.8); // 아래 구름 바다 (살짝 푸르게: 위 구름과 구분)
       if (h < 1) out.lerp(_c.set(0xeef3fa), smooth(1, -6, h) * 0.5);                               // 구름 덩어리 가장자리도 하얗게
-      const pf = fbm(x * 0.022 + 3, z * 0.022, 2);
-      out.set(0xdfe9f6).lerp(_c.set(0xffffff), smooth(0.35, 0.7, pf));                              // 몽글몽글: 솟은 곳 하얗게, 골은 푸른 그늘
-      out.lerp(_c.set(0xffffff), vnoise(x * 0.09, z * 0.09) * 0.3);
+      out.set(0xe3ecf8).lerp(_c.set(0xffffff), smooth(1, 7, skyPuff(x, z)));                     // 몽글몽글: 솟은 곳 하얗게, 골은 옅은 푸른 그늘
     }
     return out;
   }
