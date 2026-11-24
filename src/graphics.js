@@ -289,7 +289,7 @@ export class Graphics {
       const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * (CFG.sky.edge - 70), x = Math.cos(a) * r, z = Math.sin(a) * r;
       const h = terrainHeight(x, z); if (h < -4) continue;
       const o = off.find(([dx, dz]) => terrainHeight(x + dx, z + dz) < -20); if (!o) continue;
-      const s = 11 + Math.random() * 11;
+      const s = 14 + Math.random() * 14;
       this.rimPuffs.set(j++, x + o[0] * 0.5, h - s * 0.25, z + o[1] * 0.5, s, 1, 1, 1, 1);
       if (j < M && Math.random() < 0.6) this.rimPuffs.set(j++, x + o[0] * 0.9, h - s * 0.9, z + o[1] * 0.9, s * 1.2, 1, 1, 1, 1);
     }
@@ -309,6 +309,29 @@ export class Graphics {
     const ug = new THREE.BufferGeometry(); ug.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); ug.setIndex(idx); ug.computeVertexNormals();
     this.underside = new THREE.Mesh(ug, new THREE.MeshLambertMaterial({ color: 0xeef4fc, emissive: 0x5a6a80, side: THREE.DoubleSide }));
     this.scene.add(this.underside);
+    // 아래 구름 바다: 위 구름 덩어리들 밑까지 빈틈없이 깔린 한 장 (떨어지면 여기서 튕김)
+    const sp = [0, Y, 0], si = [];
+    for (let i = 0; i < SEG; i++) { const a = i / SEG * Math.PI * 2, R = skyEdgeAt(Math.cos(a) * 1700, Math.sin(a) * 1700) - 50; sp.push(Math.cos(a) * R, Y, Math.sin(a) * R); }
+    for (let i = 0; i < SEG; i++) si.push(0, 1 + (i + 1) % SEG, 1 + i);
+    const sg = new THREE.BufferGeometry(); sg.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3)); sg.setIndex(si); sg.computeVertexNormals();
+    this.cloudSea = new THREE.Mesh(sg, new THREE.MeshLambertMaterial({ color: 0xb8cdea, emissive: 0x2a3a58 }));
+    this.cloudSea.receiveShadow = true;
+    this.scene.add(this.cloudSea);
+    // 위 구름 덩어리들의 밑면 (높이 -6m): 덩어리가 있는 곳만 (빈틈은 뚫려 있음) → 덩어리 사이로 아래 구름 바다가 보이는 '빈 공간'
+    const NM = this.mobile ? 320 : 400, HM = 1800, mask = new Uint8Array(NM * NM * 4);
+    for (let jz = 0; jz < NM; jz++) for (let ix = 0; ix < NM; ix++) {
+      const x = -HM + (ix + 0.5) / NM * HM * 2, z = -HM + (jz + 0.5) / NM * HM * 2, k = (jz * NM + ix) * 4;
+      const v = terrainHeight(x, z) > -10 ? 255 : 0;
+      mask[k] = mask[k + 1] = mask[k + 2] = mask[k + 3] = v;
+    }
+    const mt = new THREE.DataTexture(mask, NM, NM, THREE.RGBAFormat); mt.magFilter = THREE.LinearFilter; mt.minFilter = THREE.LinearFilter; mt.needsUpdate = true;
+    const cg = new THREE.BufferGeometry();
+    cg.setAttribute('position', new THREE.Float32BufferAttribute([-HM, -6, -HM, HM, -6, -HM, HM, -6, HM, -HM, -6, HM], 3));
+    cg.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+    cg.setAttribute('normal', new THREE.Float32BufferAttribute([0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0], 3));
+    cg.setIndex([0, 1, 2, 0, 2, 3]);
+    this.cloudBottom = new THREE.Mesh(cg, new THREE.MeshLambertMaterial({ color: 0xe6eef8, emissive: 0x6a7a92, alphaMap: mt, alphaTest: 0.5, side: THREE.DoubleSide }));
+    this.scene.add(this.cloudBottom);
     this.scene.add(this.rimPuffs.mesh);
   }
 

@@ -460,7 +460,7 @@ function starPath(g, cx, cy, ro, ri) {
 // 하늘 도시: 높이 -44m 아래(구름 바다 바로 아래)의 땅은 그리지 않음 → 그 아래는 뻥 뚫린 하늘
 function clipBelow(sh) {
   sh.vertexShader = 'varying float vWy;\n' + sh.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\n vWy = (modelMatrix * vec4(transformed, 1.0)).y;');
-  sh.fragmentShader = 'varying float vWy;\n' + sh.fragmentShader.replace('void main() {', 'void main() {\n if (vWy < -44.0) discard;');
+  sh.fragmentShader = 'varying float vWy;\n' + sh.fragmentShader.replace('void main() {', 'void main() {\n if (vWy < -6.0) discard;');
 }
 class TerrainStreamer {
   constructor(world, mobile) {
@@ -956,7 +956,7 @@ export class World {
     } else if (this.mode === 'sky') {
       if (h < -100) return out.set(this.T.skyBottom);                                              // 끝 너머: 하늘
       if (h < -20) return out.set(0xe4eefa).lerp(_c.set(0xbcd2ee), vnoise(x * 0.03, z * 0.03) * 0.8); // 아래 구름 바다 (살짝 푸르게: 위 구름과 구분)
-      if (h < 1) out.lerp(_c.set(0xc4d4ea), smooth(1, -15, h) * 0.6);                              // 구름 덩어리 옆면은 살짝 그늘
+      if (h < 1) out.lerp(_c.set(0xeef3fa), smooth(1, -6, h) * 0.5);                               // 구름 덩어리 가장자리도 하얗게
       out.lerp(_c.set(0xffffff), vnoise(x * 0.11, z * 0.11) * 0.35);                                // 몽글몽글
     }
     return out;
