@@ -198,6 +198,24 @@ const skyEdgeR = (x, z) => CFG.sky.edge + (vnoise(x * 0.004 + 31, z * 0.004 - 7)
 const lavaEdgeR = (x, z) => CFG.lava.edge + (vnoise(x * 0.004 + 20, z * 0.004) - 0.5) * 160;
 export function skyEdgeAt(x, z) { return skyEdgeR(x, z); }
 // 하늘 도시 아래 구름 바다: 크고 작은 구름 언덕이 울퉁불퉁 (튕기는 높이도 이 모양 그대로)
+// 하늘 도시 구름 산: 좌표를 비틀어서 같은 무늬가 반복되지 않는 불규칙한 곡선 언덕
+export function skyHills(x, z) {
+  const wx = x + (fbm(x * 0.0035 + 11, z * 0.0035, 2) - 0.5) * 240, wz = z + (fbm(x * 0.0035 - 7, z * 0.0035 + 19, 2) - 0.5) * 240;
+  const a = fbm(wx * 0.0085, wz * 0.0085, 4), b = fbm(wx * 0.024 + 5, wz * 0.024 - 3, 3), c = vnoise(wx * 0.06, wz * 0.06);
+  return Math.pow(smooth(0.22, 0.85, a), 1.15) * 18 + Math.max(0, b - 0.32) * 15 + c * 1.8;
+}
+// 점프대·가속 발판 자리는 평평하게 (기울면 어긋남)
+let _flatSpots = null;
+function skyFlat(x, z) {
+  if (!_flatSpots) {
+    _flatSpots = [];
+    _flatSpots.push([startRoadX(380), 380, 22]); // (구름 스테이지엔 360도 루프가 없어서 점프대·가속 발판 자리만)
+    for (const th of [0.75, 1.9, 3.0, 3.9, 4.85, 5.95, 1.0, 2.2, 3.15, 4.0, 5.1, 6.1]) { const p = ringPoint(th); _flatSpots.push([p.x, p.z, 24]); }
+  }
+  let f = 0;
+  for (const [fx, fz, r] of _flatSpots) { const d = Math.hypot(x - fx, z - fz); if (d < r) f = Math.max(f, 1 - smooth(r * 0.55, r, d)); }
+  return f;
+}
 export function skyPuff(x, z) { // 위 구름 땅의 둥근 언덕 (넓고 부드럽게)
   return Math.pow(smooth(0.28, 0.85, fbm(x * 0.011 + 3, z * 0.011, 3)), 1.2) * 13 + Math.pow(fbm(x * 0.034 + 9, z * 0.034 - 4, 2), 1.5) * 6;
 }
@@ -252,7 +270,7 @@ export function terrainHeight(x, z) {
     if (rv < 0.03) h = mix(h, -3, (1 - smooth(0.012, 0.03, rv)) * smooth(90, 160, Math.hypot(x, z)));
   } else if (md === 'sky') { // 구름 덩어리 땅: 낮고 몽글몽글, 덩어리 사이사이 빈틈 → 아래 구름 바다로 떨어짐
     const wasWater = h < 0.3;
-    h = 3 + (h - 3) * 0.3 + skyPuff(x, z);                              // 크고 둥근 뭉게구름 언덕
+    h = 3 + (h - 3) * 0.3;                                              // (구름 산은 맨 끝에서 더함)
     const m = fbm(x * 0.0042 + 17, z * 0.0042 - 3, 3);
     const nearEdge = smooth(skyEdgeR(x, z) - 170, skyEdgeR(x, z) - 110, Math.hypot(x, z)); // 끝 근처는 빈틈 없이 (깔끔한 낭떠러지)
     h -= Math.pow(1 - smooth(0.405, 0.5, m), 1.6) * 9 * (1 - nearEdge);   // 빈틈 가까이: 둥글게 말려 내려가는 구름 가장자리
@@ -277,7 +295,14 @@ export function terrainHeight(x, z) {
     if (ds > E - 160) h = mix(h, -22, smooth(E - 160, E + 50, ds));
     return h;
   }
-  if (md === 'sky') { // 구름 땅의 끝: 둥글게 말려 내려가는 가장자리 (그 아래는 아무것도 없는 하늘)
+  if (md === 'sky') {
+    // 평지 없이 전부 구름 산: 이리저리 휘어진 불규칙한 언덕 (길·기지 위는 조금 완만하게, 루프·점프대 자리만 평평)
+    if (h > -10) {
+      let site = 0; for (const F of SITES_LIST) site = Math.max(site, 1 - smooth(F.r * 0.7, F.r * 1.1, Math.hypot(x - F.x, z - F.z)));
+      const w = (1 - 0.55 * roadMask(x, z)) * (1 - 0.8 * site) * (1 - 0.55 * (1 - smooth(25, 60, ds))) * (1 - skyFlat(x, z));
+      h += skyHills(x, z) * w * smooth(-8, 0, h);
+    }
+    // 구름 땅의 끝: 둥글게 말려 내려가는 가장자리 (그 아래는 아무것도 없는 하늘)
     const E = skyEdgeR(x, z), R = 45, d = ds - (E - R);
     if (d > 0) h = d >= R ? -900 : h - (R - Math.sqrt(R * R - d * d));
     return h;
@@ -787,24 +812,6 @@ export class World {
       balls.push({ x: cx * (E - 14), y: -12 - r2 * 0.3, z: cz * (E - 14), r: r2 });
     }
     const rimCount = balls.length;
-    // 땅 위 전체: 반쯤 묻힌 구름 공으로 어디를 봐도 몽글몽글 (길·퀘스트 장소·루프 둘레는 비움)
-    const SS = mob ? 22 : 15, siteList = Object.values(SITES);
-    const busy = (x, z, pad) => roadDist(x, z) < ROAD.width + pad || siteList.some((F) => Math.hypot(x - F.x, z - F.z) < F.r + pad) || this.loops.some((L) => Math.hypot(x - L.base.x, z - L.base.z) < 30 + pad) || Math.hypot(x, z) < 30;
-    // 불규칙하게: 격자 대신 무작위로 뿌리고, 구름이 몰린 곳·휑한 곳이 있게 (노이즈로 밀도), 크기는 작은 것~아주 큰 것, 큰 더미엔 작은 공을 겹겹이
-    const tries = Math.round((R * 2 / SS) * (R * 2 / SS) * 1.6);
-    for (let n = 0; n < tries; n++) {
-      const px = (rnd() * 2 - 1) * R, pz = (rnd() * 2 - 1) * R;
-      const dens = fbm(px * 0.007 + 41, pz * 0.007 - 17, 3), big = fbm(px * 0.016 - 9, pz * 0.016 + 23, 2);
-      if (rnd() > smooth(0.35, 0.72, dens) * 0.95) continue;                       // 몰린 곳은 빽빽, 휑한 곳은 듬성
-      const h = terrainHeight(px, pz);
-      if (h < 0 || Math.hypot(px, pz) > skyEdgeR(px, pz) - 40 || busy(px, pz, 2)) continue;
-      const r = (mob ? 3.5 : 2.5) + Math.pow(rnd(), 1.8) * (5 + big * big * 16);   // 대부분 작고, 가끔 아주 큰 덩어리
-      balls.push({ x: px, y: h - r * (0.45 + rnd() * 0.35), z: pz, r, s: true });
-      if (r > 8) { // 큰 더미: 위·옆에 작은 공을 겹겹이 (뭉게뭉게 솟은 모양)
-        const m = 1 + Math.floor(rnd() * (mob ? 2 : 4));
-        for (let k = 0; k < m; k++) { const a = rnd() * Math.PI * 2, d = r * (0.3 + rnd() * 0.5), rr = r * (0.35 + rnd() * 0.35); balls.push({ x: px + Math.cos(a) * d, y: h + r * (0.05 + rnd() * 0.3), z: pz + Math.sin(a) * d, r: rr, s: true }); }
-      }
-    }
     // 나무·장치 밑동과 집·랜드마크 둘레: 구름에 파묻힌 것처럼
     const bury = (x, z, r, n) => { const h = terrainHeight(x, z); if (h < 0) return; for (let k = 0; k < n; k++) { const a = rnd() * Math.PI * 2, d = r * (0.5 + rnd() * 0.6), rr = r * (0.45 + rnd() * 0.35); balls.push({ x: x + Math.cos(a) * d, y: terrainHeight(x + Math.cos(a) * d, z + Math.sin(a) * d) - rr * 0.45, z: z + Math.sin(a) * d, r: rr, s: true }); } };
     for (const t of this.treeTypes) { const set = this.trees[t]; set.data.forEach((d, i) => { if (mob && i % 2) return; bury(d.x, d.z, 2.6 * d.s, 2); }); }
@@ -1064,7 +1071,7 @@ export class World {
       if (h < -100) return out.set(this.T.skyBottom);                                              // 끝 너머: 하늘
       if (h < -20) return out.set(0xe4eefa).lerp(_c.set(0xbcd2ee), vnoise(x * 0.03, z * 0.03) * 0.8); // 아래 구름 바다 (살짝 푸르게: 위 구름과 구분)
       if (h < 1) out.lerp(_c.set(0xeef3fa), smooth(1, -6, h) * 0.5);                               // 구름 덩어리 가장자리도 하얗게
-      out.set(0xe3ecf8).lerp(_c.set(0xffffff), smooth(1, 7, skyPuff(x, z)));                     // 몽글몽글: 솟은 곳 하얗게, 골은 옅은 푸른 그늘
+      out.set(0xdde8f6).lerp(_c.set(0xffffff), smooth(2, 16, h));                                // 솟은 곳은 하얗게, 골은 옅은 푸른 그늘
     }
     return out;
   }
@@ -1361,6 +1368,7 @@ export class World {
   }
 
   _addLoop(base, fwd, R = CFG.loop.radius, offset = CFG.loop.width + 1.5) {
+    if (this.mode === 'sky') return { entry: base.clone(), base: base.clone() }; // 구름 스테이지에는 360도 루프가 없음
     fwd = fwd.clone().normalize();
     const side = new THREE.Vector3(fwd.z, 0, -fwd.x);
     base = base.clone().addScaledVector(side, offset * 0.5);   // 입구가 길 한가운데 오도록
