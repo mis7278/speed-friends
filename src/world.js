@@ -199,7 +199,7 @@ const lavaEdgeR = (x, z) => CFG.lava.edge + (vnoise(x * 0.004 + 20, z * 0.004) -
 export function skyEdgeAt(x, z) { return skyEdgeR(x, z); }
 // 하늘 도시 아래 구름 바다: 크고 작은 구름 언덕이 울퉁불퉁 (튕기는 높이도 이 모양 그대로)
 export function skyPuff(x, z) { // 위 구름 땅의 둥근 언덕 (넓고 부드럽게)
-  return Math.pow(smooth(0.3, 0.85, fbm(x * 0.011 + 3, z * 0.011, 3)), 1.3) * 9 + (vnoise(x * 0.028 + 9, z * 0.028) - 0.5) * 1.4;
+  return Math.pow(smooth(0.28, 0.85, fbm(x * 0.011 + 3, z * 0.011, 3)), 1.2) * 13 + Math.pow(fbm(x * 0.034 + 9, z * 0.034 - 4, 2), 1.5) * 6;
 }
 // 위 구름 덩어리 안쪽 깊이 (0 = 빈틈 가장자리, 1 = 한가운데): 밑면이 가운데로 갈수록 볼록하게 처짐
 export function skyClumpDepth(x, z) {
@@ -786,6 +786,31 @@ export class World {
       balls.push({ x: cx * (E - 4), y: -3 - r1 * 0.3, z: cz * (E - 4), r: r1 });
       balls.push({ x: cx * (E - 14), y: -12 - r2 * 0.3, z: cz * (E - 14), r: r2 });
     }
+    const rimCount = balls.length;
+    // 땅 위 전체: 반쯤 묻힌 구름 공으로 어디를 봐도 몽글몽글 (길·퀘스트 장소·루프 둘레는 비움)
+    const SS = mob ? 22 : 15, siteList = Object.values(SITES);
+    const busy = (x, z, pad) => roadDist(x, z) < ROAD.width + pad || siteList.some((F) => Math.hypot(x - F.x, z - F.z) < F.r + pad) || this.loops.some((L) => Math.hypot(x - L.base.x, z - L.base.z) < 30 + pad) || Math.hypot(x, z) < 30;
+    // 불규칙하게: 격자 대신 무작위로 뿌리고, 구름이 몰린 곳·휑한 곳이 있게 (노이즈로 밀도), 크기는 작은 것~아주 큰 것, 큰 더미엔 작은 공을 겹겹이
+    const tries = Math.round((R * 2 / SS) * (R * 2 / SS) * 1.6);
+    for (let n = 0; n < tries; n++) {
+      const px = (rnd() * 2 - 1) * R, pz = (rnd() * 2 - 1) * R;
+      const dens = fbm(px * 0.007 + 41, pz * 0.007 - 17, 3), big = fbm(px * 0.016 - 9, pz * 0.016 + 23, 2);
+      if (rnd() > smooth(0.35, 0.72, dens) * 0.95) continue;                       // 몰린 곳은 빽빽, 휑한 곳은 듬성
+      const h = terrainHeight(px, pz);
+      if (h < 0 || Math.hypot(px, pz) > skyEdgeR(px, pz) - 40 || busy(px, pz, 2)) continue;
+      const r = (mob ? 3.5 : 2.5) + Math.pow(rnd(), 1.8) * (5 + big * big * 16);   // 대부분 작고, 가끔 아주 큰 덩어리
+      balls.push({ x: px, y: h - r * (0.45 + rnd() * 0.35), z: pz, r, s: true });
+      if (r > 8) { // 큰 더미: 위·옆에 작은 공을 겹겹이 (뭉게뭉게 솟은 모양)
+        const m = 1 + Math.floor(rnd() * (mob ? 2 : 4));
+        for (let k = 0; k < m; k++) { const a = rnd() * Math.PI * 2, d = r * (0.3 + rnd() * 0.5), rr = r * (0.35 + rnd() * 0.35); balls.push({ x: px + Math.cos(a) * d, y: h + r * (0.05 + rnd() * 0.3), z: pz + Math.sin(a) * d, r: rr, s: true }); }
+      }
+    }
+    // 나무·장치 밑동과 집·랜드마크 둘레: 구름에 파묻힌 것처럼
+    const bury = (x, z, r, n) => { const h = terrainHeight(x, z); if (h < 0) return; for (let k = 0; k < n; k++) { const a = rnd() * Math.PI * 2, d = r * (0.5 + rnd() * 0.6), rr = r * (0.45 + rnd() * 0.35); balls.push({ x: x + Math.cos(a) * d, y: terrainHeight(x + Math.cos(a) * d, z + Math.sin(a) * d) - rr * 0.45, z: z + Math.sin(a) * d, r: rr, s: true }); } };
+    for (const t of this.treeTypes) { const set = this.trees[t]; set.data.forEach((d, i) => { if (mob && i % 2) return; bury(d.x, d.z, 2.6 * d.s, 2); }); }
+    for (const hs of this.houses) { const c = hs.min.clone().add(hs.max).multiplyScalar(0.5); bury(c.x, c.z, Math.max(hs.max.x - hs.min.x, hs.max.z - hs.min.z) * 0.75, mob ? 5 : 8); }
+    for (const L of this.landmarks) bury(L.x, L.z, 20, mob ? 7 : 12);
+    for (const k in SITES) { const F = SITES[k]; for (let a = 0; a < Math.PI * 2; a += (mob ? 0.4 : 0.25)) bury(F.x + Math.cos(a) * F.r, F.z + Math.sin(a) * F.r, 8, 1); }
     // 칸별로 나눠서 (가까운 칸만 그림)
     const cells = new Map(), C = 320;
     this.ballGrid = new Map();
@@ -793,6 +818,7 @@ export class World {
       const k = Math.floor(b.x / C) + ',' + Math.floor(b.z / C);
       if (!cells.has(k)) cells.set(k, []); cells.get(k).push(b);
       const r = b.r;
+      if (b.s) continue;
       for (let gx = Math.floor((b.x - r) / 40); gx <= Math.floor((b.x + r) / 40); gx++) for (let gz = Math.floor((b.z - r) / 40); gz <= Math.floor((b.z + r) / 40); gz++) { const key = gx * 100003 + gz; if (!this.ballGrid.has(key)) this.ballGrid.set(key, []); this.ballGrid.get(key).push(b); }
     }
     const geo = new THREE.SphereGeometry(1, mob ? 11 : 16, mob ? 7 : 11);
@@ -802,7 +828,8 @@ export class World {
     for (const [k, list] of cells) {
       const mesh = new THREE.InstancedMesh(geo, mat, list.length);
       list.forEach((b, i) => {
-        _m.compose(_p.set(b.x, b.y, b.z), _q.identity(), _s.set(b.r, b.r * 0.82, b.r)); mesh.setMatrixAt(i, _m);
+        const sh = (b.x * 12.9898 + b.z * 78.233) % 1, sh2 = (b.x * 39.346 + b.z * 11.135) % 1;
+        _m.compose(_p.set(b.x, b.y, b.z), _q.setFromEuler(_e.set(0, sh * 6.28, 0)), _s.set(b.r * (1 + Math.abs(sh) * 0.45), b.r * (0.65 + Math.abs(sh2) * 0.3), b.r * (0.85 + Math.abs(sh2) * 0.3))); mesh.setMatrixAt(i, _m);
         mesh.setColorAt(i, col.set(0xffffff).lerp(_c.set(0xcddbee), Math.min(1, Math.max(0, (-b.y - 4) / 14)) * 0.8)); // 아래쪽 혹은 살짝 푸른 그늘
       });
       mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true;
@@ -811,7 +838,7 @@ export class World {
       this.root.add(mesh);
       this.ballCells.push({ mesh, cx: (ix + 0.5) * C, cz: (iz + 0.5) * C });
     }
-    this.cloudBallCount = balls.length;
+    this.cloudBallCount = balls.length; this.rimBallCount = rimCount;
   }
 
   lavaAt(x, z) { return this.mode === 'lava' && terrainHeight(x, z) < CFG.lava.level; }
